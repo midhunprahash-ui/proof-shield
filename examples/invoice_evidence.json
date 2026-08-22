@@ -1,0 +1,10 @@
+{
+  "evidence_id": "invoice_manual_0001",
+  "evidence_type": "INVOICE",
+  "source_file_id": "file_replace_with_upload_response",
+  "human_confirmed_source": true,
+  "order_id": "order_demo_0001",
+  "payment_id": "pay_demo_0001",
+  "amount": "1250.00",
+  "issued_at": "2030-08-19T10:00:00Z"
+}

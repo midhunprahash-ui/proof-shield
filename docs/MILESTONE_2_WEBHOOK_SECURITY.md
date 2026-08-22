@@ -100,3 +100,6 @@ Automated tests cover:
 Create a trusted local merchant evidence store with invoices, delivery proofs,
 and customer conversations. Then connect document extraction behind the
 deterministic safety boundary.
+
+This evidence-store milestone is now implemented and documented in
+`MILESTONE_3_EVIDENCE_STORE.md`.

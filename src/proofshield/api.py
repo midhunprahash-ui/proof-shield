@@ -8,12 +8,30 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from pydantic import BaseModel, ValidationError
 
 from proofshield import __version__
 from proofshield.audit import AuditStatus, ClaimResult, LocalEventLedger
-from proofshield.domain import Assessment, DisputeCase
+from proofshield.case_store import (
+    CaseConflictError,
+    CaseHistoryEntry,
+    CaseNotFoundError,
+    CaseSummary,
+    EvidenceConflictError,
+    EvidenceFileMetadata,
+    LocalCaseRepository,
+)
+from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
+from proofshield.evidence import EvidenceSubmission
+from proofshield.file_store import (
+    MAX_EVIDENCE_FILE_BYTES,
+    EvidenceFileError,
+    EvidenceFileTooLarge,
+    LocalEvidenceFileStore,
+    UnsupportedEvidenceFile,
+    safe_original_name,
+)
 from proofshield.verifier import CaseAssessor
 from proofshield.webhook_adapter import WebhookAdaptationError, adapt_dispute_created_event
 from proofshield.webhook_models import RazorpayDisputeWebhook
@@ -45,6 +63,8 @@ def create_app(
     *,
     webhook_secret: str | None = None,
     ledger_path: Path | None = None,
+    database_path: Path | None = None,
+    evidence_storage_path: Path | None = None,
 ) -> FastAPI:
     application = FastAPI(
         title="ProofShield API",
@@ -58,8 +78,18 @@ def create_app(
     configured_ledger_path = ledger_path or Path(
         os.getenv("PROOFSHIELD_AUDIT_PATH", "data/runtime/webhook_audit.jsonl")
     )
+    configured_database_path = database_path or Path(
+        os.getenv("PROOFSHIELD_DB_PATH", "data/runtime/proofshield.sqlite3")
+    )
+    configured_evidence_path = evidence_storage_path or Path(
+        os.getenv("PROOFSHIELD_EVIDENCE_PATH", "data/runtime/evidence")
+    )
     ledger = LocalEventLedger(configured_ledger_path)
+    case_repository = LocalCaseRepository(configured_database_path)
+    evidence_file_store = LocalEvidenceFileStore(configured_evidence_path)
     application.state.webhook_ledger = ledger
+    application.state.case_repository = case_repository
+    application.state.evidence_file_store = evidence_file_store
 
     @application.get("/health")
     def health() -> dict[str, str]:
@@ -68,6 +98,176 @@ def create_app(
     @application.post("/v1/assessments", response_model=Assessment)
     def create_assessment(case: DisputeCase) -> Assessment:
         return assessor.assess(case)
+
+    @application.post(
+        "/v1/cases",
+        response_model=DisputeCase,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_local_case(case: DisputeCase) -> DisputeCase:
+        if case.evidence:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Create the case first, then add evidence through its evidence endpoint.",
+            )
+        try:
+            created = case_repository.save_case(case, source="manual_api")
+        except CaseConflictError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        if not created:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"case {case.dispute_id} already exists",
+            )
+        return case_repository.get_case(case.dispute_id)
+
+    @application.get("/v1/cases", response_model=list[CaseSummary])
+    def list_local_cases() -> list[CaseSummary]:
+        return case_repository.list_cases()
+
+    @application.get("/v1/cases/{dispute_id}", response_model=DisputeCase)
+    def get_local_case(dispute_id: str) -> DisputeCase:
+        try:
+            return case_repository.get_case(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.post(
+        "/v1/cases/{dispute_id}/files",
+        response_model=EvidenceFileMetadata,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def upload_case_file(
+        dispute_id: str,
+        file: Annotated[UploadFile, File(description="Local evidence source")],
+    ) -> EvidenceFileMetadata:
+        try:
+            case_repository.get_case(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+        try:
+            content = await file.read(MAX_EVIDENCE_FILE_BYTES + 1)
+            blob = evidence_file_store.save(content, content_type=file.content_type)
+            normalized_content_type = (file.content_type or "").split(
+                ";", maxsplit=1
+            )[0].strip().lower()
+            return case_repository.register_evidence_file(
+                dispute_id,
+                original_name=safe_original_name(file.filename),
+                content_type=normalized_content_type,
+                size_bytes=blob.size_bytes,
+                sha256=blob.sha256,
+                storage_key=blob.storage_key,
+            )
+        except EvidenceFileTooLarge as error:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=str(error),
+            ) from error
+        except UnsupportedEvidenceFile as error:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=str(error),
+            ) from error
+        except EvidenceFileError as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        finally:
+            await file.close()
+
+    @application.get(
+        "/v1/cases/{dispute_id}/files",
+        response_model=list[EvidenceFileMetadata],
+    )
+    def list_case_files(dispute_id: str) -> list[EvidenceFileMetadata]:
+        try:
+            return case_repository.list_evidence_files(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.post(
+        "/v1/cases/{dispute_id}/evidence",
+        response_model=EvidenceDocument,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def add_case_evidence(
+        dispute_id: str, submission: EvidenceSubmission
+    ) -> EvidenceDocument:
+        try:
+            file_metadata = None
+            if submission.source_file_id is not None:
+                file_metadata = case_repository.get_evidence_file(
+                    dispute_id, submission.source_file_id
+                )
+            document = submission.to_document(
+                resolved_source_name=(
+                    file_metadata.original_name if file_metadata is not None else None
+                ),
+                resolved_source_sha256=(
+                    file_metadata.sha256 if file_metadata is not None else None
+                ),
+            )
+            added = case_repository.add_evidence(dispute_id, document)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except EvidenceConflictError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        if not added:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"evidence {document.evidence_id} is already attached to this case",
+            )
+        return document
+
+    @application.post(
+        "/v1/cases/{dispute_id}/assessment",
+        response_model=Assessment,
+    )
+    def assess_local_case(dispute_id: str) -> Assessment:
+        try:
+            case = case_repository.get_case(dispute_id)
+            assessment = assessor.assess(case)
+            case_repository.record_assessment(assessment)
+            return assessment
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.get(
+        "/v1/cases/{dispute_id}/history",
+        response_model=list[CaseHistoryEntry],
+    )
+    def get_case_history(dispute_id: str) -> list[CaseHistoryEntry]:
+        try:
+            return case_repository.get_history(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
 
     @application.post(
         "/v1/webhooks/razorpay",
@@ -204,7 +404,10 @@ def create_app(
             ) from error
 
         try:
-            assessment = assessor.assess(case)
+            case_repository.save_case(case, source=f"razorpay_webhook:{event_id}")
+            stored_case = case_repository.get_case(case.dispute_id)
+            assessment = assessor.assess(stored_case)
+            case_repository.record_assessment(assessment)
             ledger.finish(
                 event_id,
                 digest,
@@ -214,6 +417,17 @@ def create_app(
                 decision=assessment.decision,
                 detail="Dispute event was adapted and assessed locally.",
             )
+        except CaseConflictError as error:
+            ledger.fail(
+                event_id,
+                digest,
+                event_type=event_type,
+                detail="Stored dispute conflicts with the signed webhook facts.",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
         except Exception as error:
             ledger.fail(
                 event_id,

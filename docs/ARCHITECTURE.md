@@ -57,6 +57,35 @@ Razorpay payload adapter -> deterministic verifier
 Append-only local audit record
 ```
 
+## Current evidence flow
+
+```text
+Verified webhook or manually created case
+       |
+       v
+SQLite case record (core facts are immutable)
+       |
+       v
+Upload local evidence source
+  - PDF / PNG / JPEG / JSON / UTF-8 text
+  - maximum 5 MB
+  - filename reduced to a safe label
+  - bytes checked against declared content type
+  - stored by SHA-256 hash
+       |
+       v
+Human reviews the source and enters structured facts
+       |
+       v
+Evidence ID + source file linked to exactly one dispute
+       |
+       v
+Deterministic reassessment
+       |
+       v
+Append-only case history
+```
+
 ## Planned complete flow
 
 ```text

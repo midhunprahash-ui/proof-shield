@@ -64,7 +64,12 @@ def encode_and_sign(payload: dict) -> tuple[bytes, dict[str, str]]:
 
 def make_client(tmp_path) -> TestClient:
     return TestClient(
-        create_app(webhook_secret=SECRET, ledger_path=tmp_path / "webhook_audit.jsonl")
+        create_app(
+            webhook_secret=SECRET,
+            ledger_path=tmp_path / "webhook_audit.jsonl",
+            database_path=tmp_path / "proofshield.sqlite3",
+            evidence_storage_path=tmp_path / "evidence",
+        )
     )
 
 
@@ -90,6 +95,9 @@ def test_verified_dispute_event_is_assessed_and_audited(tmp_path) -> None:
         AuditStatus.RECEIVED,
         AuditStatus.PROCESSED,
     ]
+    stored_case = client.get("/v1/cases/disp_demo_1")
+    assert stored_case.status_code == 200
+    assert stored_case.json()["evidence"] == []
 
 
 def test_duplicate_event_is_acknowledged_without_reprocessing(tmp_path) -> None:
@@ -217,7 +225,14 @@ def test_signed_request_without_event_id_is_rejected_and_audited(tmp_path) -> No
 
 def test_unconfigured_webhook_secret_fails_closed(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("RAZORPAY_WEBHOOK_SECRET", raising=False)
-    client = TestClient(create_app(webhook_secret=None, ledger_path=tmp_path / "audit.jsonl"))
+    client = TestClient(
+        create_app(
+            webhook_secret=None,
+            ledger_path=tmp_path / "audit.jsonl",
+            database_path=tmp_path / "proofshield.sqlite3",
+            evidence_storage_path=tmp_path / "evidence",
+        )
+    )
     raw_body = b"{}"
 
     response = client.post("/v1/webhooks/razorpay", content=raw_body)

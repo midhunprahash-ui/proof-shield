@@ -60,6 +60,14 @@ template so near-duplicate documents cannot leak between development and test.
 - `GET /health`
 - `POST /v1/assessments`
 - `POST /v1/webhooks/razorpay`
+- `POST /v1/cases`
+- `GET /v1/cases`
+- `GET /v1/cases/{dispute_id}`
+- `POST /v1/cases/{dispute_id}/files`
+- `GET /v1/cases/{dispute_id}/files`
+- `POST /v1/cases/{dispute_id}/evidence`
+- `POST /v1/cases/{dispute_id}/assessment`
+- `GET /v1/cases/{dispute_id}/history`
 
 The webhook endpoint is local-only. It requires:
 
@@ -70,9 +78,16 @@ Accepted events are recorded in an append-only local JSONL ledger. The default
 path is `data/runtime/webhook_audit.jsonl`, which is intentionally ignored by Git
 because real webhook records can contain sensitive merchant and customer data.
 
+Cases, evidence metadata, and history are stored in local SQLite. Uploaded
+evidence is stored by its SHA-256 content hash under `data/runtime/evidence`.
+Only PDF, PNG, JPEG, JSON, and UTF-8 text files up to 5 MB are accepted, and the
+declared content type must match the file bytes.
+
 This project is **not being deployed now**. We will consider deployment only
 after the local product, evaluation, and demo are complete.
 
 See [the foundation milestone](docs/MILESTONE_1_FOUNDATION.md) for the exact
 decision scope. See [the webhook-security milestone](docs/MILESTONE_2_WEBHOOK_SECURITY.md)
-for signature verification, idempotency, audit behavior, and limitations.
+for signature verification, idempotency, audit behavior, and limitations. See
+[the evidence-store milestone](docs/MILESTONE_3_EVIDENCE_STORE.md) for the full
+local case-to-evidence workflow.

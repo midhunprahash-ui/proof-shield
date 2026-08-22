@@ -51,6 +51,10 @@ class EvidenceDocument(BaseModel):
 
     evidence_id: str = Field(min_length=1)
     evidence_type: EvidenceType
+    source_file_id: str | None = Field(default=None, max_length=200)
+    source_name: str | None = Field(default=None, max_length=255)
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reviewed_by_human: bool = False
     source_verified: bool = False
     order_id: str | None = None
     payment_id: str | None = None
