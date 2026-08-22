@@ -1,36 +1,41 @@
-"""FastAPI entrypoint for ProofShield's local API and webhook simulator."""
+"""FastAPI entrypoint for ProofShield's assessment and webhook API."""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 from enum import StrEnum
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from pydantic import BaseModel, ValidationError
 
 from proofshield import __version__
-from proofshield.audit import AuditStatus, ClaimResult, LocalEventLedger
+from proofshield.audit import AuditStatus, ClaimResult, EventLedger
 from proofshield.case_store import (
     CaseConflictError,
     CaseHistoryEntry,
     CaseNotFoundError,
+    CaseRepository,
     CaseSummary,
     EvidenceConflictError,
     EvidenceFileMetadata,
-    LocalCaseRepository,
+    new_file_id,
 )
 from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
 from proofshield.evidence import EvidenceSubmission
 from proofshield.file_store import (
     MAX_EVIDENCE_FILE_BYTES,
     EvidenceFileError,
+    EvidenceFileStore,
     EvidenceFileTooLarge,
-    LocalEvidenceFileStore,
     UnsupportedEvidenceFile,
     safe_original_name,
+)
+from proofshield.supabase_runtime import (
+    SupabaseConfigurationError,
+    build_supabase_components,
 )
 from proofshield.verifier import CaseAssessor
 from proofshield.webhook_adapter import WebhookAdaptationError, adapt_dispute_created_event
@@ -42,6 +47,7 @@ from proofshield.webhook_security import (
 )
 
 MAX_WEBHOOK_BYTES = 1_000_000
+logger = logging.getLogger(__name__)
 
 
 class WebhookReceiptStatus(StrEnum):
@@ -62,9 +68,9 @@ class WebhookReceipt(BaseModel):
 def create_app(
     *,
     webhook_secret: str | None = None,
-    ledger_path: Path | None = None,
-    database_path: Path | None = None,
-    evidence_storage_path: Path | None = None,
+    case_repository: CaseRepository | None = None,
+    evidence_file_store: EvidenceFileStore | None = None,
+    webhook_ledger: EventLedger | None = None,
 ) -> FastAPI:
     application = FastAPI(
         title="ProofShield API",
@@ -75,25 +81,83 @@ def create_app(
     )
     assessor = CaseAssessor()
     configured_secret = webhook_secret or os.getenv("RAZORPAY_WEBHOOK_SECRET")
-    configured_ledger_path = ledger_path or Path(
-        os.getenv("PROOFSHIELD_AUDIT_PATH", "data/runtime/webhook_audit.jsonl")
-    )
-    configured_database_path = database_path or Path(
-        os.getenv("PROOFSHIELD_DB_PATH", "data/runtime/proofshield.sqlite3")
-    )
-    configured_evidence_path = evidence_storage_path or Path(
-        os.getenv("PROOFSHIELD_EVIDENCE_PATH", "data/runtime/evidence")
-    )
-    ledger = LocalEventLedger(configured_ledger_path)
-    case_repository = LocalCaseRepository(configured_database_path)
-    evidence_file_store = LocalEvidenceFileStore(configured_evidence_path)
-    application.state.webhook_ledger = ledger
-    application.state.case_repository = case_repository
-    application.state.evidence_file_store = evidence_file_store
+
+    supplied_components = (case_repository, evidence_file_store, webhook_ledger)
+    if any(component is not None for component in supplied_components) and not all(
+        component is not None for component in supplied_components
+    ):
+        raise ValueError(
+            "case_repository, evidence_file_store, and webhook_ledger must be supplied together"
+        )
+
+    configuration_error: str | None = None
+    if all(component is not None for component in supplied_components):
+        configured_cases = case_repository
+        configured_files = evidence_file_store
+        configured_ledger = webhook_ledger
+    else:
+        try:
+            components = build_supabase_components()
+        except SupabaseConfigurationError as error:
+            configured_cases = None
+            configured_files = None
+            configured_ledger = None
+            configuration_error = str(error)
+        else:
+            configured_cases = components.cases
+            configured_files = components.files
+            configured_ledger = components.ledger
+
+    application.state.persistence = "supabase" if configuration_error is None else "unconfigured"
+    application.state.configuration_error = configuration_error
+    application.state.webhook_ledger = configured_ledger
+    application.state.case_repository = configured_cases
+    application.state.evidence_file_store = configured_files
+
+    def cases() -> CaseRepository:
+        if configured_cases is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase persistence is not configured.",
+            )
+        return configured_cases
+
+    def files() -> EvidenceFileStore:
+        if configured_files is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase Storage is not configured.",
+            )
+        return configured_files
+
+    def event_ledger() -> EventLedger:
+        if configured_ledger is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase webhook persistence is not configured.",
+            )
+        return configured_ledger
 
     @application.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
+    def health(response: Response) -> dict[str, str]:
+        if configuration_error is not None:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return {
+                "status": "configuration_required",
+                "version": __version__,
+                "persistence": "supabase",
+            }
+        return {"status": "ok", "version": __version__, "persistence": "supabase"}
+
+    @application.get("/ready")
+    def readiness(response: Response) -> dict[str, str]:
+        try:
+            cases().list_cases()
+        except Exception:
+            logger.warning("Supabase readiness check failed", exc_info=True)
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return {"status": "not_ready", "persistence": "supabase"}
+        return {"status": "ready", "persistence": "supabase"}
 
     @application.post("/v1/assessments", response_model=Assessment)
     def create_assessment(case: DisputeCase) -> Assessment:
@@ -111,7 +175,7 @@ def create_app(
                 detail="Create the case first, then add evidence through its evidence endpoint.",
             )
         try:
-            created = case_repository.save_case(case, source="manual_api")
+            created = cases().save_case(case, source="manual_api")
         except CaseConflictError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -122,16 +186,16 @@ def create_app(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"case {case.dispute_id} already exists",
             )
-        return case_repository.get_case(case.dispute_id)
+        return cases().get_case(case.dispute_id)
 
     @application.get("/v1/cases", response_model=list[CaseSummary])
     def list_local_cases() -> list[CaseSummary]:
-        return case_repository.list_cases()
+        return cases().list_cases()
 
     @application.get("/v1/cases/{dispute_id}", response_model=DisputeCase)
     def get_local_case(dispute_id: str) -> DisputeCase:
         try:
-            return case_repository.get_case(dispute_id)
+            return cases().get_case(dispute_id)
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -148,7 +212,7 @@ def create_app(
         file: Annotated[UploadFile, File(description="Local evidence source")],
     ) -> EvidenceFileMetadata:
         try:
-            case_repository.get_case(dispute_id)
+            cases().get_case(dispute_id)
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -157,18 +221,34 @@ def create_app(
 
         try:
             content = await file.read(MAX_EVIDENCE_FILE_BYTES + 1)
-            blob = evidence_file_store.save(content, content_type=file.content_type)
+            file_id = new_file_id()
+            blob = files().save(
+                content,
+                content_type=file.content_type,
+                dispute_id=dispute_id,
+                file_id=file_id,
+            )
             normalized_content_type = (file.content_type or "").split(
                 ";", maxsplit=1
             )[0].strip().lower()
-            return case_repository.register_evidence_file(
-                dispute_id,
-                original_name=safe_original_name(file.filename),
-                content_type=normalized_content_type,
-                size_bytes=blob.size_bytes,
-                sha256=blob.sha256,
-                storage_key=blob.storage_key,
-            )
+            try:
+                return cases().register_evidence_file(
+                    dispute_id,
+                    file_id=file_id,
+                    original_name=safe_original_name(file.filename),
+                    content_type=normalized_content_type,
+                    size_bytes=blob.size_bytes,
+                    sha256=blob.sha256,
+                    storage_key=blob.storage_key,
+                )
+            except Exception:
+                try:
+                    files().delete(blob.storage_key)
+                except Exception:
+                    logger.exception(
+                        "Failed to remove orphaned evidence object %s", blob.storage_key
+                    )
+                raise
         except EvidenceFileTooLarge as error:
             raise HTTPException(
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -193,7 +273,7 @@ def create_app(
     )
     def list_case_files(dispute_id: str) -> list[EvidenceFileMetadata]:
         try:
-            return case_repository.list_evidence_files(dispute_id)
+            return cases().list_evidence_files(dispute_id)
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -211,7 +291,7 @@ def create_app(
         try:
             file_metadata = None
             if submission.source_file_id is not None:
-                file_metadata = case_repository.get_evidence_file(
+                file_metadata = cases().get_evidence_file(
                     dispute_id, submission.source_file_id
                 )
             document = submission.to_document(
@@ -222,7 +302,7 @@ def create_app(
                     file_metadata.sha256 if file_metadata is not None else None
                 ),
             )
-            added = case_repository.add_evidence(dispute_id, document)
+            added = cases().add_evidence(dispute_id, document)
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -246,9 +326,9 @@ def create_app(
     )
     def assess_local_case(dispute_id: str) -> Assessment:
         try:
-            case = case_repository.get_case(dispute_id)
+            case = cases().get_case(dispute_id)
             assessment = assessor.assess(case)
-            case_repository.record_assessment(assessment)
+            cases().record_assessment(assessment)
             return assessment
         except CaseNotFoundError as error:
             raise HTTPException(
@@ -262,7 +342,7 @@ def create_app(
     )
     def get_case_history(dispute_id: str) -> list[CaseHistoryEntry]:
         try:
-            return case_repository.get_history(dispute_id)
+            return cases().get_history(dispute_id)
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -290,10 +370,10 @@ def create_app(
                 detail="RAZORPAY_WEBHOOK_SECRET is not configured.",
             )
         if len(raw_body) > MAX_WEBHOOK_BYTES:
-            ledger.reject_untrusted(
+            event_ledger().reject_untrusted(
                 event_id,
                 digest,
-                detail="Request exceeded the one-megabyte local webhook limit.",
+                detail="Request exceeded the one-megabyte webhook limit.",
             )
             raise HTTPException(
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -303,14 +383,14 @@ def create_app(
         try:
             verify_webhook_signature(raw_body, x_razorpay_signature, configured_secret)
         except InvalidWebhookSignature as error:
-            ledger.reject_untrusted(event_id, digest, detail=str(error))
+            event_ledger().reject_untrusted(event_id, digest, detail=str(error))
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature.",
             ) from error
 
         if not x_razorpay_event_id or not event_id or len(event_id) > 200:
-            ledger.reject_untrusted(
+            event_ledger().reject_untrusted(
                 event_id,
                 digest,
                 detail="Signed request did not include a valid x-razorpay-event-id.",
@@ -326,7 +406,7 @@ def create_app(
                 untyped_payload.get("event") if isinstance(untyped_payload, dict) else None
             )
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            ledger.reject_untrusted(
+            event_ledger().reject_untrusted(
                 event_id,
                 digest,
                 detail="Signed webhook body was not valid JSON.",
@@ -337,7 +417,7 @@ def create_app(
             ) from error
 
         if not isinstance(event_type, str) or not event_type:
-            ledger.reject_untrusted(
+            event_ledger().reject_untrusted(
                 event_id,
                 digest,
                 detail="Signed JSON body did not contain a valid event type.",
@@ -347,7 +427,7 @@ def create_app(
                 detail="Webhook body does not contain a valid event type.",
             )
 
-        claim = ledger.claim(event_id, digest, event_type=event_type)
+        claim = event_ledger().claim(event_id, digest, event_type=event_type)
         if claim == ClaimResult.DUPLICATE:
             response.status_code = status.HTTP_200_OK
             return WebhookReceipt(
@@ -362,7 +442,7 @@ def create_app(
             )
 
         if event_type != "payment.dispute.created":
-            ledger.finish(
+            event_ledger().finish(
                 event_id,
                 digest,
                 status=AuditStatus.IGNORED,
@@ -379,7 +459,7 @@ def create_app(
             webhook = RazorpayDisputeWebhook.model_validate(untyped_payload)
             case = adapt_dispute_created_event(webhook)
         except WebhookAdaptationError as error:
-            ledger.finish(
+            event_ledger().finish(
                 event_id,
                 digest,
                 status=AuditStatus.NEEDS_ENRICHMENT,
@@ -392,7 +472,7 @@ def create_app(
                 detail=str(error),
             )
         except ValidationError as error:
-            ledger.fail(
+            event_ledger().fail(
                 event_id,
                 digest,
                 event_type=event_type,
@@ -404,21 +484,21 @@ def create_app(
             ) from error
 
         try:
-            case_repository.save_case(case, source=f"razorpay_webhook:{event_id}")
-            stored_case = case_repository.get_case(case.dispute_id)
+            cases().save_case(case, source=f"razorpay_webhook:{event_id}")
+            stored_case = cases().get_case(case.dispute_id)
             assessment = assessor.assess(stored_case)
-            case_repository.record_assessment(assessment)
-            ledger.finish(
+            cases().record_assessment(assessment)
+            event_ledger().finish(
                 event_id,
                 digest,
                 status=AuditStatus.PROCESSED,
                 event_type=event_type,
                 dispute_id=case.dispute_id,
                 decision=assessment.decision,
-                detail="Dispute event was adapted and assessed locally.",
+                detail="Dispute event was adapted, stored, and assessed.",
             )
         except CaseConflictError as error:
-            ledger.fail(
+            event_ledger().fail(
                 event_id,
                 digest,
                 event_type=event_type,
@@ -429,15 +509,15 @@ def create_app(
                 detail=str(error),
             ) from error
         except Exception as error:
-            ledger.fail(
+            event_ledger().fail(
                 event_id,
                 digest,
                 event_type=event_type,
-                detail="Unexpected local processing failure.",
+                detail="Unexpected webhook processing failure.",
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Local webhook processing failed.",
+                detail="Webhook processing failed.",
             ) from error
         return WebhookReceipt(
             event_id=event_id,

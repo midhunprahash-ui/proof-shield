@@ -7,9 +7,9 @@ from proofshield.case_store import (
     CaseHistoryAction,
     CaseNotFoundError,
     EvidenceConflictError,
-    LocalCaseRepository,
 )
 from proofshield.domain import EvidenceDocument, EvidenceType
+from proofshield.memory import InMemoryCaseRepository
 from proofshield.synthetic import make_case
 
 
@@ -30,24 +30,22 @@ def invoice(case, *, evidence_id: str = "invoice_1") -> EvidenceDocument:
     )
 
 
-def test_case_and_evidence_round_trip_across_restart(tmp_path) -> None:
-    path = tmp_path / "proofshield.sqlite3"
-    repository = LocalCaseRepository(path)
+def test_case_and_evidence_round_trip() -> None:
+    repository = InMemoryCaseRepository()
     case = empty_case(1)
 
     assert repository.save_case(case, source="test") is True
     assert repository.add_evidence(case.dispute_id, invoice(case)) is True
 
-    restarted = LocalCaseRepository(path)
-    stored = restarted.get_case(case.dispute_id)
+    stored = repository.get_case(case.dispute_id)
     assert stored.model_dump() == case.model_copy(
         update={"evidence": [invoice(case)]}
     ).model_dump()
-    assert restarted.list_cases()[0].evidence_count == 1
+    assert repository.list_cases()[0].evidence_count == 1
 
 
-def test_same_core_case_is_idempotent_but_changed_facts_conflict(tmp_path) -> None:
-    repository = LocalCaseRepository(tmp_path / "proofshield.sqlite3")
+def test_same_core_case_is_idempotent_but_changed_facts_conflict() -> None:
+    repository = InMemoryCaseRepository()
     case = empty_case(2)
     repository.save_case(case, source="first")
 
@@ -58,8 +56,8 @@ def test_same_core_case_is_idempotent_but_changed_facts_conflict(tmp_path) -> No
         repository.save_case(changed_case, source="conflict")
 
 
-def test_evidence_id_cannot_move_between_cases(tmp_path) -> None:
-    repository = LocalCaseRepository(tmp_path / "proofshield.sqlite3")
+def test_evidence_id_cannot_move_between_cases() -> None:
+    repository = InMemoryCaseRepository()
     first = empty_case(3)
     second = empty_case(4)
     repository.save_case(first, source="test")
@@ -73,8 +71,8 @@ def test_evidence_id_cannot_move_between_cases(tmp_path) -> None:
         )
 
 
-def test_case_history_is_append_only_and_ordered(tmp_path) -> None:
-    repository = LocalCaseRepository(tmp_path / "proofshield.sqlite3")
+def test_case_history_is_append_only_and_ordered() -> None:
+    repository = InMemoryCaseRepository()
     case = empty_case(5)
     repository.save_case(case, source="test")
     repository.add_evidence(case.dispute_id, invoice(case))
@@ -88,8 +86,8 @@ def test_case_history_is_append_only_and_ordered(tmp_path) -> None:
     assert history[0].sequence < history[1].sequence
 
 
-def test_unknown_case_is_rejected(tmp_path) -> None:
-    repository = LocalCaseRepository(tmp_path / "proofshield.sqlite3")
+def test_unknown_case_is_rejected() -> None:
+    repository = InMemoryCaseRepository()
 
     with pytest.raises(CaseNotFoundError):
         repository.get_case("missing")

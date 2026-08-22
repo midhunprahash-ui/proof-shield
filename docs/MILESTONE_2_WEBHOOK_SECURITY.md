@@ -1,4 +1,4 @@
-# Milestone 2: local webhook security and audit trail
+# Milestone 2: webhook security and audit trail
 
 ## What works now
 
@@ -11,7 +11,7 @@ POST /v1/webhooks/razorpay
 Before reading any business fields, it:
 
 1. Keeps the original request bytes unchanged.
-2. Limits the local request body to one megabyte.
+2. Limits the request body to one megabyte.
 3. Calculates HMAC-SHA256 using `RAZORPAY_WEBHOOK_SECRET`.
 4. Compares the expected and received signatures in constant time.
 5. Requires `x-razorpay-event-id` for idempotency.
@@ -19,7 +19,7 @@ Before reading any business fields, it:
 7. Validates the signed JSON against a minimal official-payload-compatible contract.
 8. Adapts payment amounts from currency subunits to major units.
 9. Sends the resulting case through the deterministic evidence verifier.
-10. Appends the result to a local JSONL audit ledger.
+10. Appends the result to the Supabase Postgres audit ledger.
 
 This follows Razorpay's current guidance:
 
@@ -42,7 +42,7 @@ Razorpay can deliver the same event more than once. ProofShield uses the
 - Same event ID and same body: return success without running the workflow again.
 - Same event ID and a different body: reject the conflict.
 - A failed, incomplete event may be retried.
-- A completed event remains protected after a local restart.
+- A completed event remains protected across restarts and backend processes.
 
 Rejected signature attempts are audited but never reserve their supplied event
 ID. This prevents an attacker from blocking a later legitimate event by sending
@@ -58,24 +58,26 @@ the ID first with an invalid signature.
 - `FAILED`: authentic event could not be processed and may be retried.
 - `REJECTED`: signature, payload, or event-ID security check failed.
 
-The ledger defaults to `data/runtime/webhook_audit.jsonl`. It is not committed.
+`proofshield_webhook_events` holds the current idempotency state and
+`proofshield_webhook_audit` holds the append-only attempt history. Postgres RPCs
+claim, finish, fail, or reject each event transactionally.
 
 ## Important limitation
 
 A dispute-created webhook does not contain the merchant's invoice, courier
 record, or customer conversation. Therefore a successfully received event will
 normally produce `INSUFFICIENT_EVIDENCE` until the next milestone enriches it
-with trusted local evidence.
+with trusted evidence.
 
 That is the honest result. ProofShield does not invent evidence just to produce
 a successful-looking demo.
 
-## Local-only status
+## Current hosting status
 
-Nothing is deployed and no external webhook is configured. The ledger is safe
-for a single local process and local demonstrations. A future deployment would
-replace it with transactional storage plus a background queue and would add
-infrastructure-level request limits and network controls.
+The API is not deployed and no external Razorpay webhook is configured.
+Supabase is the only cloud dependency and already provides durable,
+cross-process idempotency. A future backend deployment may add a background
+queue, infrastructure-level request limits, and network controls.
 
 ## Verification coverage
 
@@ -86,7 +88,7 @@ Automated tests cover:
 - missing and malformed signatures;
 - forged signatures;
 - duplicate delivery;
-- persistence across restart;
+- durable idempotency behavior;
 - event-ID/body conflicts;
 - retry after failure;
 - malformed signed payloads;
@@ -97,7 +99,7 @@ Automated tests cover:
 
 ## Next milestone
 
-Create a trusted local merchant evidence store with invoices, delivery proofs,
+Create a trusted merchant evidence store with invoices, delivery proofs,
 and customer conversations. Then connect document extraction behind the
 deterministic safety boundary.
 

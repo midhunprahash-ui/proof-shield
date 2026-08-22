@@ -42,7 +42,7 @@ Raw Razorpay-compatible webhook bytes
 HMAC-SHA256 verification over the untouched bytes
        |
        v
-x-razorpay-event-id claim
+x-razorpay-event-id transaction in Supabase Postgres
   - new event -> continue
   - same ID + same body -> acknowledge duplicate
   - same ID + changed body -> reject conflict
@@ -54,7 +54,7 @@ Official-payload-compatible Pydantic contract
 Razorpay payload adapter -> deterministic verifier
        |
        v
-Append-only local audit record
+Append-only Supabase audit record
 ```
 
 ## Current evidence flow
@@ -63,15 +63,15 @@ Append-only local audit record
 Verified webhook or manually created case
        |
        v
-SQLite case record (core facts are immutable)
+Supabase Postgres case record (core facts are immutable)
        |
        v
-Upload local evidence source
+Upload evidence source to private Supabase Storage
   - PDF / PNG / JPEG / JSON / UTF-8 text
   - maximum 5 MB
   - filename reduced to a safe label
   - bytes checked against declared content type
-  - stored by SHA-256 hash
+  - case-isolated server key includes the SHA-256 hash
        |
        v
 Human reviews the source and enters structured facts
@@ -89,7 +89,7 @@ Append-only case history
 ## Planned complete flow
 
 ```text
-Verified local webhook event
+Verified webhook event
        |
        v
 Payment, order and merchant-evidence adapters
@@ -117,9 +117,15 @@ claims as verified. Source verification comes from trusted integration adapters.
 The deterministic verifier remains the final gate before a response can be
 drafted. Final submission always requires a human.
 
-## Local-only boundary
+## Current cloud boundary
 
-The current event ledger is designed for one local application process. It is
-durable across restarts but is not a replacement for a transactional database
-or queue in a distributed deployment. We are deliberately postponing those
-systems until deployment is actually needed.
+Supabase is currently the only cloud system. It provides Postgres, transaction-safe
+webhook idempotency, append-only audit/history tables, and a private evidence
+bucket. The API and frontend are not deployed. This keeps today’s architecture
+simple while allowing either component to be hosted elsewhere later.
+
+All public-schema ProofShield tables use RLS with no browser-facing policies.
+Only backend code holding the Supabase secret/service-role key can access them.
+That key must never enter the frontend. When user accounts are introduced, the
+schema will gain explicit ownership columns and narrowly scoped policies rather
+than opening the current backend tables directly.

@@ -1,13 +1,12 @@
-"""Content-addressed storage for small local evidence files."""
+"""Evidence-file validation and private Supabase Storage persistence."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
+from typing import Any, Protocol
 
 ALLOWED_CONTENT_TYPES = {
     "application/json",
@@ -42,6 +41,19 @@ class StoredFileBlob:
     size_bytes: int
 
 
+class EvidenceFileStore(Protocol):
+    def save(
+        self,
+        content: bytes,
+        *,
+        content_type: str | None,
+        dispute_id: str,
+        file_id: str,
+    ) -> StoredFileBlob: ...
+
+    def delete(self, storage_key: str) -> None: ...
+
+
 def safe_original_name(value: str | None) -> str:
     if value is None:
         return "evidence"
@@ -51,58 +63,75 @@ def safe_original_name(value: str | None) -> str:
     return name[:255]
 
 
-class LocalEvidenceFileStore:
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
+def normalize_and_validate_file(
+    content: bytes, content_type: str | None
+) -> tuple[str, str]:
+    normalized = (content_type or "").split(";", maxsplit=1)[0].strip().lower()
+    if normalized not in ALLOWED_CONTENT_TYPES:
+        raise UnsupportedEvidenceFile(
+            f"unsupported evidence content type: {normalized or 'missing'}"
+        )
+    if not content:
+        raise EvidenceFileError("evidence file must not be empty")
+    if len(content) > MAX_EVIDENCE_FILE_BYTES:
+        raise EvidenceFileTooLarge(
+            f"evidence file exceeds {MAX_EVIDENCE_FILE_BYTES} bytes"
+        )
+    _validate_content(content, normalized)
+    return normalized, hashlib.sha256(content).hexdigest()
 
-    def save(self, content: bytes, *, content_type: str | None) -> StoredFileBlob:
-        normalized_content_type = (content_type or "").split(";", maxsplit=1)[0].strip().lower()
-        if normalized_content_type not in ALLOWED_CONTENT_TYPES:
-            raise UnsupportedEvidenceFile(
-                f"unsupported evidence content type: {normalized_content_type or 'missing'}"
-            )
-        if not content:
-            raise EvidenceFileError("evidence file must not be empty")
-        if len(content) > MAX_EVIDENCE_FILE_BYTES:
-            raise EvidenceFileTooLarge(
-                f"evidence file exceeds {MAX_EVIDENCE_FILE_BYTES} bytes"
-            )
-        self._validate_content(content, normalized_content_type)
 
-        digest = hashlib.sha256(content).hexdigest()
-        final_path = self.root / digest
-        if not final_path.exists():
-            temporary_path = self.root / f".{uuid4().hex}.tmp"
-            try:
-                with temporary_path.open("xb") as handle:
-                    handle.write(content)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary_path, final_path)
-            finally:
-                temporary_path.unlink(missing_ok=True)
+def _validate_content(content: bytes, content_type: str) -> None:
+    if content_type == "application/pdf" and not content.startswith(b"%PDF-"):
+        raise MalformedEvidenceFile("file content does not match application/pdf")
+    if content_type == "image/png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise MalformedEvidenceFile("file content does not match image/png")
+    if content_type == "image/jpeg" and not content.startswith(b"\xff\xd8\xff"):
+        raise MalformedEvidenceFile("file content does not match image/jpeg")
+    if content_type == "application/json":
+        try:
+            json.loads(content)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise MalformedEvidenceFile("file content is not valid JSON") from error
+    if content_type == "text/plain":
+        try:
+            content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise MalformedEvidenceFile("text evidence is not valid UTF-8") from error
+
+
+class SupabaseEvidenceFileStore:
+    """Write evidence bytes only through the Supabase Storage API."""
+
+    def __init__(self, client: Any, *, bucket: str) -> None:
+        self.client = client
+        self.bucket = bucket
+
+    def save(
+        self,
+        content: bytes,
+        *,
+        content_type: str | None,
+        dispute_id: str,
+        file_id: str,
+    ) -> StoredFileBlob:
+        normalized, digest = normalize_and_validate_file(content, content_type)
+        case_key = hashlib.sha256(dispute_id.encode("utf-8")).hexdigest()
+        storage_key = f"cases/{case_key}/{file_id}/{digest}"
+        self.client.storage.from_(self.bucket).upload(
+            path=storage_key,
+            file=content,
+            file_options={
+                "content-type": normalized,
+                "cache-control": "3600",
+                "upsert": "false",
+            },
+        )
         return StoredFileBlob(
-            storage_key=digest,
+            storage_key=storage_key,
             sha256=digest,
             size_bytes=len(content),
         )
 
-    @staticmethod
-    def _validate_content(content: bytes, content_type: str) -> None:
-        if content_type == "application/pdf" and not content.startswith(b"%PDF-"):
-            raise MalformedEvidenceFile("file content does not match application/pdf")
-        if content_type == "image/png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
-            raise MalformedEvidenceFile("file content does not match image/png")
-        if content_type == "image/jpeg" and not content.startswith(b"\xff\xd8\xff"):
-            raise MalformedEvidenceFile("file content does not match image/jpeg")
-        if content_type == "application/json":
-            try:
-                json.loads(content)
-            except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                raise MalformedEvidenceFile("file content is not valid JSON") from error
-        if content_type == "text/plain":
-            try:
-                content.decode("utf-8")
-            except UnicodeDecodeError as error:
-                raise MalformedEvidenceFile("text evidence is not valid UTF-8") from error
+    def delete(self, storage_key: str) -> None:
+        self.client.storage.from_(self.bucket).remove([storage_key])

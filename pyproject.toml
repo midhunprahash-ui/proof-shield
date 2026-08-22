@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.116,<1",
   "pydantic>=2.11,<3",
   "python-multipart>=0.0.20,<1",
+  "supabase>=2.31,<3",
   "uvicorn[standard]>=0.35,<1",
 ]
 

@@ -28,16 +28,30 @@ unavailable.
 
 ## Run locally
 
-ProofShield requires Python 3.12 or newer.
+ProofShield requires Python 3.12 or newer and the ProofShield Supabase project.
+Supabase is the only persistent cloud dependency at this stage; the API and any
+future frontend still run locally until deployment is explicitly chosen.
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
+cp .env.example .env
+# Add the backend-only Supabase secret key and Razorpay webhook secret to .env.
+set -a
+source .env
+set +a
 uvicorn proofshield.api:app --reload
 ```
 
 Open `http://127.0.0.1:8000/docs` for the interactive API documentation.
+Apply [`supabase/migrations/20260822190000_proofshield_supabase_foundation.sql`](supabase/migrations/20260822190000_proofshield_supabase_foundation.sql)
+to project `qoujhmqkjicvcwoiyqkp` before using the persistent endpoints.
+
+The backend accepts `SUPABASE_SECRET_KEY` (preferred) or the legacy
+`SUPABASE_SERVICE_ROLE_KEY`. Never expose either value to browser code. The
+configured `SUPABASE_PROJECT_REF` must match the hostname in `SUPABASE_URL`, so
+ProofShield refuses to start its persistence layer against the wrong project.
 
 ## Test
 
@@ -58,6 +72,7 @@ template so near-duplicate documents cannot leak between development and test.
 ## Current API
 
 - `GET /health`
+- `GET /ready` (verifies the Supabase persistence path)
 - `POST /v1/assessments`
 - `POST /v1/webhooks/razorpay`
 - `POST /v1/cases`
@@ -69,25 +84,31 @@ template so near-duplicate documents cannot leak between development and test.
 - `POST /v1/cases/{dispute_id}/assessment`
 - `GET /v1/cases/{dispute_id}/history`
 
-The webhook endpoint is local-only. It requires:
+The webhook receiver requires:
 
 - `X-Razorpay-Signature`: HMAC-SHA256 over the exact raw request bytes.
 - `x-razorpay-event-id`: Razorpay's unique event identifier for duplicate protection.
 
-Accepted events are recorded in an append-only local JSONL ledger. The default
-path is `data/runtime/webhook_audit.jsonl`, which is intentionally ignored by Git
-because real webhook records can contain sensitive merchant and customer data.
+Webhook idempotency and the append-only audit trail are stored transactionally
+in Supabase Postgres. Cases, evidence metadata, structured evidence, and case
+history use the same database. Uploaded evidence bytes go to the private
+`proofshield-evidence` Supabase Storage bucket under a case-isolated,
+server-generated key that does not expose the dispute ID. Only PDF, PNG, JPEG,
+JSON, and UTF-8 text files up to 5 MB
+are accepted, and the declared content type must match the file bytes.
 
-Cases, evidence metadata, and history are stored in local SQLite. Uploaded
-evidence is stored by its SHA-256 content hash under `data/runtime/evidence`.
-Only PDF, PNG, JPEG, JSON, and UTF-8 text files up to 5 MB are accepted, and the
-declared content type must match the file bytes.
+All ProofShield tables have Row Level Security enabled. There are deliberately
+no `anon` or `authenticated` policies yet; only the trusted backend can access
+them. Frontend access will be designed later alongside user ownership and Auth.
 
-This project is **not being deployed now**. We will consider deployment only
-after the local product, evaluation, and demo are complete.
+This project is **not being deployed now**. Supabase is the initial managed data
+platform, but the backend and frontend remain local. Other hosting can be added
+later without changing the core evidence rules.
 
 See [the foundation milestone](docs/MILESTONE_1_FOUNDATION.md) for the exact
 decision scope. See [the webhook-security milestone](docs/MILESTONE_2_WEBHOOK_SECURITY.md)
 for signature verification, idempotency, audit behavior, and limitations. See
 [the evidence-store milestone](docs/MILESTONE_3_EVIDENCE_STORE.md) for the full
-local case-to-evidence workflow.
+Supabase-backed case-to-evidence workflow.
+See [the Supabase setup guide](docs/SUPABASE_SETUP.md) for the project guard,
+migration, environment, and verification steps.

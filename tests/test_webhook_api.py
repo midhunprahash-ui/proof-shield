@@ -6,6 +6,11 @@ from fastapi.testclient import TestClient
 from proofshield.api import create_app
 from proofshield.audit import AuditStatus
 from proofshield.domain import Decision
+from proofshield.memory import (
+    InMemoryCaseRepository,
+    InMemoryEventLedger,
+    InMemoryEvidenceFileStore,
+)
 from proofshield.webhook_security import calculate_webhook_signature
 
 SECRET = "local-test-secret"
@@ -66,9 +71,9 @@ def make_client(tmp_path) -> TestClient:
     return TestClient(
         create_app(
             webhook_secret=SECRET,
-            ledger_path=tmp_path / "webhook_audit.jsonl",
-            database_path=tmp_path / "proofshield.sqlite3",
-            evidence_storage_path=tmp_path / "evidence",
+            case_repository=InMemoryCaseRepository(),
+            evidence_file_store=InMemoryEvidenceFileStore(),
+            webhook_ledger=InMemoryEventLedger(),
         )
     )
 
@@ -228,9 +233,9 @@ def test_unconfigured_webhook_secret_fails_closed(tmp_path, monkeypatch) -> None
     client = TestClient(
         create_app(
             webhook_secret=None,
-            ledger_path=tmp_path / "audit.jsonl",
-            database_path=tmp_path / "proofshield.sqlite3",
-            evidence_storage_path=tmp_path / "evidence",
+            case_repository=InMemoryCaseRepository(),
+            evidence_file_store=InMemoryEvidenceFileStore(),
+            webhook_ledger=InMemoryEventLedger(),
         )
     )
     raw_body = b"{}"

@@ -2,18 +2,60 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
-from proofshield.api import app
+from proofshield.api import create_app
 from proofshield.domain import Decision
+from proofshield.memory import (
+    InMemoryCaseRepository,
+    InMemoryEventLedger,
+    InMemoryEvidenceFileStore,
+)
 from proofshield.synthetic import make_case
 
-client = TestClient(app)
+client = TestClient(
+    create_app(
+        case_repository=InMemoryCaseRepository(),
+        evidence_file_store=InMemoryEvidenceFileStore(),
+        webhook_ledger=InMemoryEventLedger(),
+    )
+)
 
 
 def test_health() -> None:
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "0.1.0"}
+    assert response.json() == {
+        "status": "ok",
+        "version": "0.1.0",
+        "persistence": "supabase",
+    }
+
+
+def test_readiness_checks_persistence() -> None:
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "persistence": "supabase"}
+
+
+def test_missing_supabase_configuration_fails_closed(monkeypatch) -> None:
+    for name in {
+        "SUPABASE_PROJECT_REF",
+        "SUPABASE_URL",
+        "SUPABASE_SECRET_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_EVIDENCE_BUCKET",
+    }:
+        monkeypatch.delenv(name, raising=False)
+    unconfigured = TestClient(create_app())
+
+    health = unconfigured.get("/health")
+    cases = unconfigured.get("/v1/cases")
+
+    assert health.status_code == 503
+    assert health.json()["status"] == "configuration_required"
+    assert cases.status_code == 503
+    assert cases.json()["detail"] == "Supabase persistence is not configured."
 
 
 def test_create_assessment() -> None:
