@@ -59,6 +59,20 @@ template so near-duplicate documents cannot leak between development and test.
 
 - `GET /health`
 - `POST /v1/assessments`
+- `POST /v1/webhooks/razorpay`
+
+The webhook endpoint is local-only. It requires:
+
+- `X-Razorpay-Signature`: HMAC-SHA256 over the exact raw request bytes.
+- `x-razorpay-event-id`: Razorpay's unique event identifier for duplicate protection.
+
+Accepted events are recorded in an append-only local JSONL ledger. The default
+path is `data/runtime/webhook_audit.jsonl`, which is intentionally ignored by Git
+because real webhook records can contain sensitive merchant and customer data.
+
+This project is **not being deployed now**. We will consider deployment only
+after the local product, evaluation, and demo are complete.
 
 See [the foundation milestone](docs/MILESTONE_1_FOUNDATION.md) for the exact
-scope, known limitations, and next steps.
+decision scope. See [the webhook-security milestone](docs/MILESTONE_2_WEBHOOK_SECURITY.md)
+for signature verification, idempotency, audit behavior, and limitations.

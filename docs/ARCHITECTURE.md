@@ -30,13 +30,37 @@ Structured checks + plain-language summary
 Human approval remains mandatory
 ```
 
+## Current webhook flow
+
+```text
+Raw Razorpay-compatible webhook bytes
+       |
+       v
+1 MB local size gate
+       |
+       v
+HMAC-SHA256 verification over the untouched bytes
+       |
+       v
+x-razorpay-event-id claim
+  - new event -> continue
+  - same ID + same body -> acknowledge duplicate
+  - same ID + changed body -> reject conflict
+       |
+       v
+Official-payload-compatible Pydantic contract
+       |
+       v
+Razorpay payload adapter -> deterministic verifier
+       |
+       v
+Append-only local audit record
+```
+
 ## Planned complete flow
 
 ```text
-Razorpay dispute webhook
-       |
-       v
-Raw-body signature verification + idempotent event storage
+Verified local webhook event
        |
        v
 Payment, order and merchant-evidence adapters
@@ -45,16 +69,16 @@ Payment, order and merchant-evidence adapters
 AI document extraction
        |
        v
-Deterministic verifier (current milestone)
+Deterministic verifier
        |
        v
 Policy engine -> response draft or abstention
        |
        v
-Human approval -> Razorpay draft action
+Human approval -> optional Razorpay draft action later
        |
        v
-Immutable audit trail and outcome evaluation
+Outcome evaluation
 ```
 
 ## Safety boundary
@@ -63,3 +87,10 @@ The future AI component may propose extracted facts, but it cannot mark its own
 claims as verified. Source verification comes from trusted integration adapters.
 The deterministic verifier remains the final gate before a response can be
 drafted. Final submission always requires a human.
+
+## Local-only boundary
+
+The current event ledger is designed for one local application process. It is
+durable across restarts but is not a replacement for a transactional database
+or queue in a distributed deployment. We are deliberately postponing those
+systems until deployment is actually needed.

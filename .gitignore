@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local ProofShield runtime state. The committed synthetic fixtures remain under
+# data/synthetic; webhook audit records can contain sensitive merchant data.
+data/runtime/
