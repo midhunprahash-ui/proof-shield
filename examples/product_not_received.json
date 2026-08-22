@@ -1,0 +1,46 @@
+{
+  "dispute_id": "disp_demo_0001",
+  "reason": "PRODUCT_NOT_RECEIVED",
+  "payment_id": "pay_demo_0001",
+  "order_id": "order_demo_0001",
+  "disputed_amount": "1250.00",
+  "currency": "INR",
+  "created_at": "2030-08-22T10:00:00Z",
+  "respond_by": "2030-08-27T10:00:00Z",
+  "payment": {
+    "payment_id": "pay_demo_0001",
+    "order_id": "order_demo_0001",
+    "amount": "1250.00",
+    "currency": "INR",
+    "captured": true
+  },
+  "evidence": [
+    {
+      "evidence_id": "invoice_0001",
+      "evidence_type": "INVOICE",
+      "source_verified": true,
+      "order_id": "order_demo_0001",
+      "payment_id": "pay_demo_0001",
+      "amount": "1250.00",
+      "issued_at": "2030-08-19T10:00:00Z"
+    },
+    {
+      "evidence_id": "delivery_0001",
+      "evidence_type": "DELIVERY_PROOF",
+      "source_verified": true,
+      "order_id": "order_demo_0001",
+      "payment_id": "pay_demo_0001",
+      "issued_at": "2030-08-21T10:00:00Z",
+      "delivery_status": "delivered"
+    },
+    {
+      "evidence_id": "message_0001",
+      "evidence_type": "CUSTOMER_COMMUNICATION",
+      "source_verified": true,
+      "order_id": "order_demo_0001",
+      "payment_id": "pay_demo_0001",
+      "customer_acknowledged_delivery": true,
+      "text": "Thank you, I received the order."
+    }
+  ]
+}
