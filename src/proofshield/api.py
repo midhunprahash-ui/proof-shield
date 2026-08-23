@@ -19,11 +19,18 @@ from proofshield.case_store import (
     CaseNotFoundError,
     CaseRepository,
     CaseSummary,
+    DraftConflictError,
+    DraftNotFoundError,
     EvidenceConflictError,
     EvidenceFileMetadata,
     new_file_id,
 )
 from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
+from proofshield.drafting import (
+    DraftGenerationError,
+    EvidenceGroundedDraftGenerator,
+    ResponseDraft,
+)
 from proofshield.evidence import EvidenceSubmission
 from proofshield.file_store import (
     MAX_EVIDENCE_FILE_BYTES,
@@ -80,6 +87,7 @@ def create_app(
         ),
     )
     assessor = CaseAssessor()
+    draft_generator = EvidenceGroundedDraftGenerator()
     configured_secret = webhook_secret or os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
     supplied_components = (case_repository, evidence_file_store, webhook_ledger)
@@ -331,6 +339,68 @@ def create_app(
             cases().record_assessment(assessment)
             return assessment
         except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.post(
+        "/v1/cases/{dispute_id}/drafts",
+        response_model=ResponseDraft,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_case_draft(dispute_id: str, response: Response) -> ResponseDraft:
+        try:
+            case = cases().get_case(dispute_id)
+            assessment = assessor.assess(case)
+            draft = draft_generator.generate(case, assessment)
+            created = cases().save_draft(draft)
+            stored = cases().get_draft(dispute_id, draft.draft_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except DraftGenerationError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        except DraftConflictError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return stored
+
+    @application.get(
+        "/v1/cases/{dispute_id}/drafts",
+        response_model=list[ResponseDraft],
+    )
+    def list_case_drafts(dispute_id: str) -> list[ResponseDraft]:
+        try:
+            return cases().list_drafts(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.get(
+        "/v1/cases/{dispute_id}/drafts/{draft_id}",
+        response_model=ResponseDraft,
+    )
+    def get_case_draft(dispute_id: str, draft_id: str) -> ResponseDraft:
+        try:
+            return cases().get_draft(dispute_id, draft_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except DraftNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(error),

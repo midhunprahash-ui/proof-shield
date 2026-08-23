@@ -14,6 +14,12 @@ deadline, invoice, and delivery evidence. It then returns one of three decisions
 
 ProofShield only prepares a response. A human must approve any final action.
 
+For `SAFE_TO_DRAFT` cases with human-reviewed, file-backed evidence, ProofShield
+can now produce a deterministic response draft with invoice and delivery
+citations. The draft is stored as `PENDING_HUMAN_APPROVAL`; it is never submitted
+automatically. No model training or LLM call is required for this trusted
+baseline.
+
 ## Why this architecture
 
 The project intentionally separates two jobs:
@@ -82,6 +88,9 @@ template so near-duplicate documents cannot leak between development and test.
 - `GET /v1/cases/{dispute_id}/files`
 - `POST /v1/cases/{dispute_id}/evidence`
 - `POST /v1/cases/{dispute_id}/assessment`
+- `POST /v1/cases/{dispute_id}/drafts`
+- `GET /v1/cases/{dispute_id}/drafts`
+- `GET /v1/cases/{dispute_id}/drafts/{draft_id}`
 - `GET /v1/cases/{dispute_id}/history`
 
 The webhook receiver requires:
@@ -89,9 +98,10 @@ The webhook receiver requires:
 - `X-Razorpay-Signature`: HMAC-SHA256 over the exact raw request bytes.
 - `x-razorpay-event-id`: Razorpay's unique event identifier for duplicate protection.
 
-Webhook idempotency and the append-only audit trail are stored transactionally
+Webhook idempotency, response-draft idempotency, and append-only audit trails are stored transactionally
 in Supabase Postgres. Cases, evidence metadata, structured evidence, and case
-history use the same database. Uploaded evidence bytes go to the private
+history use the same database. Drafts cite only human-reviewed sources linked to
+uploaded files and their SHA-256 hashes. Uploaded evidence bytes go to the private
 `proofshield-evidence` Supabase Storage bucket under a case-isolated,
 server-generated key that does not expose the dispute ID. Only PDF, PNG, JPEG,
 JSON, and UTF-8 text files up to 5 MB
@@ -114,3 +124,6 @@ See [the Supabase setup guide](docs/SUPABASE_SETUP.md) for the project guard,
 migration, environment, and verification steps.
 See [Milestone 4](docs/MILESTONE_4_SUPABASE_ACTIVATION.md) for the live-schema
 activation and verification record.
+See [Milestone 5](docs/MILESTONE_5_LIVE_INTEGRATION.md) for the local Python to
+live Supabase integration result. See [Milestone 6](docs/MILESTONE_6_RESPONSE_DRAFTS.md)
+for the cited drafting gate, idempotency, persistence, and live verification.

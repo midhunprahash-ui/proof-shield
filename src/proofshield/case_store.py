@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import AwareDatetime, BaseModel
 
 from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
+from proofshield.drafting import ResponseDraft
 
 
 class CaseStoreError(RuntimeError):
@@ -29,11 +30,20 @@ class EvidenceConflictError(CaseStoreError):
     pass
 
 
+class DraftConflictError(CaseStoreError):
+    pass
+
+
+class DraftNotFoundError(CaseStoreError):
+    pass
+
+
 class CaseHistoryAction(StrEnum):
     CASE_CREATED = "CASE_CREATED"
     FILE_UPLOADED = "FILE_UPLOADED"
     EVIDENCE_ADDED = "EVIDENCE_ADDED"
     ASSESSED = "ASSESSED"
+    DRAFT_CREATED = "DRAFT_CREATED"
 
 
 class CaseSummary(BaseModel):
@@ -94,6 +104,12 @@ class CaseRepository(Protocol):
     def add_evidence(self, dispute_id: str, document: EvidenceDocument) -> bool: ...
 
     def record_assessment(self, assessment: Assessment) -> None: ...
+
+    def save_draft(self, draft: ResponseDraft) -> bool: ...
+
+    def get_draft(self, dispute_id: str, draft_id: str) -> ResponseDraft: ...
+
+    def list_drafts(self, dispute_id: str) -> list[ResponseDraft]: ...
 
     def get_history(self, dispute_id: str) -> list[CaseHistoryEntry]: ...
 
@@ -299,6 +315,65 @@ class SupabaseCaseRepository:
             raise CaseNotFoundError(f"case {assessment.dispute_id} was not found")
         if result != "RECORDED":
             raise CaseStoreError(f"unexpected assessment-record status: {result}")
+
+    def save_draft(self, draft: ResponseDraft) -> bool:
+        result = _rpc_status(
+            self.client,
+            "proofshield_save_response_draft",
+            {
+                "p_draft_id": draft.draft_id,
+                "p_dispute_id": draft.dispute_id,
+                "p_decision": str(draft.decision),
+                "p_status": str(draft.status),
+                "p_generator": draft.generator,
+                "p_input_sha256": draft.input_sha256,
+                "p_content_sha256": draft.content_sha256,
+                "p_draft_json": draft.model_dump(mode="json"),
+                "p_created_at": draft.created_at.isoformat(),
+            },
+        )
+        if result == "CREATED":
+            return True
+        if result == "EXISTS":
+            return False
+        if result == "CASE_NOT_FOUND":
+            raise CaseNotFoundError(f"case {draft.dispute_id} was not found")
+        if result == "CONFLICT":
+            raise DraftConflictError(
+                f"draft {draft.draft_id} already exists with different content"
+            )
+        if result == "REJECTED":
+            raise DraftConflictError("only pending SAFE_TO_DRAFT responses can be stored")
+        raise CaseStoreError(f"unexpected save-draft status: {result}")
+
+    def get_draft(self, dispute_id: str, draft_id: str) -> ResponseDraft:
+        rows = (
+            self.client.table("proofshield_response_drafts")
+            .select("draft_json")
+            .eq("draft_id", draft_id)
+            .eq("dispute_id", dispute_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            raise DraftNotFoundError(
+                f"draft {draft_id} was not found for case {dispute_id}"
+            )
+        return ResponseDraft.model_validate(rows[0]["draft_json"])
+
+    def list_drafts(self, dispute_id: str) -> list[ResponseDraft]:
+        self._require_case(dispute_id)
+        rows = (
+            self.client.table("proofshield_response_drafts")
+            .select("draft_json")
+            .eq("dispute_id", dispute_id)
+            .order("created_at", desc=True)
+            .order("draft_id")
+            .execute()
+            .data
+        )
+        return [ResponseDraft.model_validate(row["draft_json"]) for row in rows]
 
     def get_history(self, dispute_id: str) -> list[CaseHistoryEntry]:
         self._require_case(dispute_id)

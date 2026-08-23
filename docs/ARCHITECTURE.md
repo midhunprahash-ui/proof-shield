@@ -27,7 +27,15 @@ Decision policy
 Structured checks + plain-language summary
        |
        v
-Human approval remains mandatory
+Evidence-grounded draft gate
+  - only SAFE_TO_DRAFT
+  - human-reviewed file provenance required
+  - invoice and delivery claims carry citations
+  - deterministic input/content hashes
+       |
+       v
+PENDING_HUMAN_APPROVAL
+  - no automatic submission
 ```
 
 ## Current webhook flow
@@ -129,3 +137,7 @@ Only backend code holding the Supabase secret/service-role key can access them.
 That key must never enter the frontend. When user accounts are introduced, the
 schema will gain explicit ownership columns and narrowly scoped policies rather
 than opening the current backend tables directly.
+
+Response drafts use the same boundary. They are append-only through the trusted
+backend, transactionally add one `DRAFT_CREATED` history event, and cannot be
+read directly by browser roles.

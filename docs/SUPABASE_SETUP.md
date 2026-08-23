@@ -18,16 +18,17 @@ codex mcp login supabase-proofshield
 Run `/mcp` in a new Codex task and confirm `supabase-proofshield` is enabled.
 MCP servers added during an existing task load on the next task/session.
 
-## Applied repository migration
+## Applied repository migrations
 
-The source-of-truth migration is:
+The source-of-truth migrations are:
 
 ```text
 supabase/migrations/20260823160507_proofshield_supabase_foundation.sql
+supabase/migrations/20260823170424_response_drafts.sql
 ```
 
-It was applied on 2026-08-23 and is recorded by Supabase as migration version
-`20260823160507`. Before any future schema change, use the
+They were applied on 2026-08-23 and are recorded by Supabase as migration
+versions `20260823160507` and `20260823170424`. Before any future schema change, use the
 `supabase-proofshield` MCP `get_project_url` tool and confirm the result is exactly:
 
 ```text
@@ -36,11 +37,11 @@ https://qoujhmqkjicvcwoiyqkp.supabase.co
 
 Do not run ProofShield migrations through the older `supabase` connection.
 
-The migration creates:
+The migrations create:
 
-- six RLS-enabled `proofshield_*` tables for cases, evidence, history, webhook
-  state, and append-only audit entries;
-- transaction-safe Postgres RPCs for case idempotency and webhook claims;
+- seven RLS-enabled `proofshield_*` tables for cases, evidence, response drafts,
+  history, webhook state, and append-only audit entries;
+- transaction-safe Postgres RPCs for case, draft, and webhook idempotency;
 - indexes for every foreign key and primary read path;
 - a private `proofshield-evidence` Storage bucket with a 5 MB limit and MIME
   allowlist;
@@ -52,7 +53,7 @@ The activation verification confirmed:
 1. every `proofshield_*` table has RLS enabled;
 2. the Storage bucket is private and enforces the 5 MB/MIME restrictions;
 3. anonymous and authenticated roles cannot access tables or RPCs;
-4. service-role case, evidence, history, and webhook transactions work;
+4. service-role case, evidence, draft, history, and webhook transactions work;
 5. replay and conflict results are deterministic;
 6. all synthetic verification data was removed after the test.
 

@@ -3,6 +3,9 @@ from pathlib import Path
 MIGRATION = Path(
     "supabase/migrations/20260823160507_proofshield_supabase_foundation.sql"
 )
+DRAFT_MIGRATION = Path(
+    "supabase/migrations/20260823170424_response_drafts.sql"
+)
 TABLES = {
     "proofshield_cases",
     "proofshield_evidence",
@@ -52,3 +55,20 @@ def test_existing_rls_trigger_function_is_not_browser_callable() -> None:
         "revoke execute on function public.rls_auto_enable() "
         "from public, anon, authenticated;"
     ) in sql
+
+
+def test_response_drafts_are_backend_only_and_human_approved() -> None:
+    sql = DRAFT_MIGRATION.read_text(encoding="utf-8")
+
+    assert "create table public.proofshield_response_drafts" in sql
+    assert (
+        "alter table public.proofshield_response_drafts enable row level security;"
+        in sql
+    )
+    assert "from anon, authenticated, service_role;" in sql
+    assert "grant select, insert" in sql
+    assert "PENDING_HUMAN_APPROVAL" in sql
+    assert "DRAFT_CREATED" in sql
+    assert "security invoker" in sql
+    assert "from public, anon, authenticated;" in sql
+    assert "proofshield_response_drafts_dispute_id_idx" in sql

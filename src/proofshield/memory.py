@@ -13,11 +13,14 @@ from proofshield.case_store import (
     CaseHistoryEntry,
     CaseNotFoundError,
     CaseSummary,
+    DraftConflictError,
+    DraftNotFoundError,
     EvidenceConflictError,
     EvidenceFileMetadata,
     model_sha256,
 )
 from proofshield.domain import Assessment, Decision, DisputeCase, EvidenceDocument
+from proofshield.drafting import ResponseDraft
 from proofshield.file_store import StoredFileBlob, normalize_and_validate_file
 
 
@@ -27,6 +30,7 @@ class InMemoryCaseRepository:
         self._cases: dict[str, tuple[DisputeCase, str, datetime]] = {}
         self._evidence: dict[str, tuple[str, EvidenceDocument, str, datetime]] = {}
         self._files: dict[str, tuple[EvidenceFileMetadata, str]] = {}
+        self._drafts: dict[str, ResponseDraft] = {}
         self._history: list[CaseHistoryEntry] = []
         self._sequence = 0
 
@@ -192,6 +196,59 @@ class InMemoryCaseRepository:
                     f"evidence_score={assessment.evidence_score:.4f}."
                 ),
                 now,
+            )
+
+    def save_draft(self, draft: ResponseDraft) -> bool:
+        with self._lock:
+            self._require_case(draft.dispute_id)
+            existing = self._drafts.get(draft.draft_id)
+            if existing is not None:
+                if (
+                    existing.dispute_id == draft.dispute_id
+                    and existing.input_sha256 == draft.input_sha256
+                    and existing.content_sha256 == draft.content_sha256
+                ):
+                    return False
+                raise DraftConflictError(
+                    f"draft {draft.draft_id} already exists with different content"
+                )
+            self._drafts[draft.draft_id] = draft.model_copy(deep=True)
+            case, digest, _updated = self._cases[draft.dispute_id]
+            self._cases[draft.dispute_id] = (case, digest, draft.created_at)
+            self._append_history(
+                draft.dispute_id,
+                CaseHistoryAction.DRAFT_CREATED,
+                draft.draft_id,
+                (
+                    f"Draft created; generator={draft.generator}; "
+                    f"status={draft.status}; decision={draft.decision}."
+                ),
+                draft.created_at,
+            )
+            return True
+
+    def get_draft(self, dispute_id: str, draft_id: str) -> ResponseDraft:
+        with self._lock:
+            self._require_case(dispute_id)
+            draft = self._drafts.get(draft_id)
+            if draft is None or draft.dispute_id != dispute_id:
+                raise DraftNotFoundError(
+                    f"draft {draft_id} was not found for case {dispute_id}"
+                )
+            return draft.model_copy(deep=True)
+
+    def list_drafts(self, dispute_id: str) -> list[ResponseDraft]:
+        with self._lock:
+            self._require_case(dispute_id)
+            rows = [
+                draft.model_copy(deep=True)
+                for draft in self._drafts.values()
+                if draft.dispute_id == dispute_id
+            ]
+            return sorted(
+                rows,
+                key=lambda draft: (draft.created_at, draft.draft_id),
+                reverse=True,
             )
 
     def get_history(self, dispute_id: str) -> list[CaseHistoryEntry]:
