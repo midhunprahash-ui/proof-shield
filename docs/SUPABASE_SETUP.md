@@ -18,23 +18,23 @@ codex mcp login supabase-proofshield
 Run `/mcp` in a new Codex task and confirm `supabase-proofshield` is enabled.
 MCP servers added during an existing task load on the next task/session.
 
-## Apply the repository migration
+## Applied repository migration
 
 The source-of-truth migration is:
 
 ```text
-supabase/migrations/20260822190000_proofshield_supabase_foundation.sql
+supabase/migrations/20260823160507_proofshield_supabase_foundation.sql
 ```
 
-Before applying it, use the `supabase-proofshield` MCP `get_project_url` tool
-and confirm the result is exactly:
+It was applied on 2026-08-23 and is recorded by Supabase as migration version
+`20260823160507`. Before any future schema change, use the
+`supabase-proofshield` MCP `get_project_url` tool and confirm the result is exactly:
 
 ```text
 https://qoujhmqkjicvcwoiyqkp.supabase.co
 ```
 
-Then apply the migration to that project. Do not run it through the older
-`supabase` connection.
+Do not run ProofShield migrations through the older `supabase` connection.
 
 The migration creates:
 
@@ -47,13 +47,14 @@ The migration creates:
 - backend-only grants for `service_role`, with `anon` and `authenticated`
   access revoked.
 
-After applying it:
+The activation verification confirmed:
 
-1. list the `public` tables and confirm every `proofshield_*` table has RLS;
-2. confirm the Storage bucket is private;
-3. run Supabase security and performance advisors;
-4. execute a transaction-safe test case through `proofshield_save_case`, read
-   it back, and remove the synthetic verification row before real use.
+1. every `proofshield_*` table has RLS enabled;
+2. the Storage bucket is private and enforces the 5 MB/MIME restrictions;
+3. anonymous and authenticated roles cannot access tables or RPCs;
+4. service-role case, evidence, history, and webhook transactions work;
+5. replay and conflict results are deterministic;
+6. all synthetic verification data was removed after the test.
 
 ## Backend environment
 

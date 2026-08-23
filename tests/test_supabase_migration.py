@@ -1,7 +1,7 @@
 from pathlib import Path
 
 MIGRATION = Path(
-    "supabase/migrations/20260822190000_proofshield_supabase_foundation.sql"
+    "supabase/migrations/20260823160507_proofshield_supabase_foundation.sql"
 )
 TABLES = {
     "proofshield_cases",
@@ -43,3 +43,12 @@ def test_rpc_functions_are_not_executable_by_browser_roles() -> None:
         statement_end = sql.index(";", revoke_position)
         statement = sql[revoke_position:statement_end]
         assert "public, anon, authenticated" in statement
+
+
+def test_existing_rls_trigger_function_is_not_browser_callable() -> None:
+    sql = MIGRATION.read_text(encoding="utf-8")
+
+    assert (
+        "revoke execute on function public.rls_auto_enable() "
+        "from public, anon, authenticated;"
+    ) in sql

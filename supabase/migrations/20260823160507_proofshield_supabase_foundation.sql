@@ -1,6 +1,10 @@
 -- ProofShield's backend-only Supabase persistence foundation.
 -- No anon/authenticated policies are created: the trusted backend is the only client initially.
 
+-- Keep the project's automatic RLS event trigger, but do not expose its
+-- SECURITY DEFINER function through the Data API.
+revoke execute on function public.rls_auto_enable() from public, anon, authenticated;
+
 create table if not exists public.proofshield_cases (
   dispute_id text primary key,
   payment_id text not null,

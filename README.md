@@ -45,8 +45,8 @@ uvicorn proofshield.api:app --reload
 ```
 
 Open `http://127.0.0.1:8000/docs` for the interactive API documentation.
-Apply [`supabase/migrations/20260822190000_proofshield_supabase_foundation.sql`](supabase/migrations/20260822190000_proofshield_supabase_foundation.sql)
-to project `qoujhmqkjicvcwoiyqkp` before using the persistent endpoints.
+The foundation migration is [`supabase/migrations/20260823160507_proofshield_supabase_foundation.sql`](supabase/migrations/20260823160507_proofshield_supabase_foundation.sql).
+It is active on project `qoujhmqkjicvcwoiyqkp`.
 
 The backend accepts `SUPABASE_SECRET_KEY` (preferred) or the legacy
 `SUPABASE_SERVICE_ROLE_KEY`. Never expose either value to browser code. The
@@ -112,3 +112,5 @@ for signature verification, idempotency, audit behavior, and limitations. See
 Supabase-backed case-to-evidence workflow.
 See [the Supabase setup guide](docs/SUPABASE_SETUP.md) for the project guard,
 migration, environment, and verification steps.
+See [Milestone 4](docs/MILESTONE_4_SUPABASE_ACTIVATION.md) for the live-schema
+activation and verification record.
