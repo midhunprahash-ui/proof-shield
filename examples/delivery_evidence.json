@@ -1,0 +1,10 @@
+{
+  "evidence_id": "delivery_manual_0001",
+  "evidence_type": "DELIVERY_PROOF",
+  "source_file_id": "file_replace_with_upload_response",
+  "human_confirmed_source": true,
+  "order_id": "order_demo_0001",
+  "payment_id": "pay_demo_0001",
+  "issued_at": "2030-08-21T10:00:00Z",
+  "delivery_status": "delivered"
+}
