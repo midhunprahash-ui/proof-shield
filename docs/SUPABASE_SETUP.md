@@ -37,6 +37,16 @@ https://qoujhmqkjicvcwoiyqkp.supabase.co
 
 Do not run ProofShield migrations through the older `supabase` connection.
 
+The next repository migration is present locally but is not yet active:
+
+```text
+supabase/migrations/20260824070552_draft_reviews_and_evidence_packets.sql
+```
+
+It must be tested and applied through `supabase-proofshield` in a task where
+that MCP connection is loaded. After activation, update this section with the
+recorded remote migration version and live verification result.
+
 The migrations create:
 
 - seven RLS-enabled `proofshield_*` tables for cases, evidence, response drafts,
@@ -67,6 +77,7 @@ SUPABASE_URL=https://qoujhmqkjicvcwoiyqkp.supabase.co
 SUPABASE_SECRET_KEY=your_backend_secret_key
 SUPABASE_EVIDENCE_BUCKET=proofshield-evidence
 RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
+PROOFSHIELD_OPERATOR_SECRET=your_separate_32_plus_character_operator_secret
 ```
 
 Use `SUPABASE_SERVICE_ROLE_KEY` only for a legacy project that does not yet have

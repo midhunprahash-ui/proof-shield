@@ -12,6 +12,7 @@ from pydantic import AwareDatetime, BaseModel
 
 from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
 from proofshield.drafting import ResponseDraft
+from proofshield.reviewing import DraftReview
 
 
 class CaseStoreError(RuntimeError):
@@ -38,12 +39,22 @@ class DraftNotFoundError(CaseStoreError):
     pass
 
 
+class ReviewConflictError(CaseStoreError):
+    pass
+
+
+class ReviewNotFoundError(CaseStoreError):
+    pass
+
+
 class CaseHistoryAction(StrEnum):
     CASE_CREATED = "CASE_CREATED"
     FILE_UPLOADED = "FILE_UPLOADED"
     EVIDENCE_ADDED = "EVIDENCE_ADDED"
     ASSESSED = "ASSESSED"
     DRAFT_CREATED = "DRAFT_CREATED"
+    DRAFT_APPROVED = "DRAFT_APPROVED"
+    DRAFT_REJECTED = "DRAFT_REJECTED"
 
 
 class CaseSummary(BaseModel):
@@ -76,6 +87,11 @@ class EvidenceFileMetadata(BaseModel):
     created_at: AwareDatetime
 
 
+class EvidenceFileRecord(BaseModel):
+    metadata: EvidenceFileMetadata
+    storage_key: str
+
+
 class CaseRepository(Protocol):
     def save_case(self, case: DisputeCase, *, source: str) -> bool: ...
 
@@ -99,6 +115,10 @@ class CaseRepository(Protocol):
         self, dispute_id: str, file_id: str
     ) -> EvidenceFileMetadata: ...
 
+    def get_evidence_file_record(
+        self, dispute_id: str, file_id: str
+    ) -> EvidenceFileRecord: ...
+
     def list_evidence_files(self, dispute_id: str) -> list[EvidenceFileMetadata]: ...
 
     def add_evidence(self, dispute_id: str, document: EvidenceDocument) -> bool: ...
@@ -110,6 +130,10 @@ class CaseRepository(Protocol):
     def get_draft(self, dispute_id: str, draft_id: str) -> ResponseDraft: ...
 
     def list_drafts(self, dispute_id: str) -> list[ResponseDraft]: ...
+
+    def save_review(self, review: DraftReview) -> bool: ...
+
+    def get_review(self, dispute_id: str, draft_id: str) -> DraftReview: ...
 
     def get_history(self, dispute_id: str) -> list[CaseHistoryEntry]: ...
 
@@ -244,10 +268,16 @@ class SupabaseCaseRepository:
     def get_evidence_file(
         self, dispute_id: str, file_id: str
     ) -> EvidenceFileMetadata:
+        return self.get_evidence_file_record(dispute_id, file_id).metadata
+
+    def get_evidence_file_record(
+        self, dispute_id: str, file_id: str
+    ) -> EvidenceFileRecord:
         rows = (
             self.client.table("proofshield_evidence_files")
             .select(
-                "file_id,dispute_id,original_name,content_type,size_bytes,sha256,created_at"
+                "file_id,dispute_id,original_name,content_type,size_bytes,sha256,"
+                "storage_key,created_at"
             )
             .eq("file_id", file_id)
             .eq("dispute_id", dispute_id)
@@ -259,7 +289,11 @@ class SupabaseCaseRepository:
             raise CaseNotFoundError(
                 f"evidence file {file_id} was not found for case {dispute_id}"
             )
-        return EvidenceFileMetadata.model_validate(rows[0])
+        row = rows[0]
+        return EvidenceFileRecord(
+            metadata=EvidenceFileMetadata.model_validate(row),
+            storage_key=row["storage_key"],
+        )
 
     def list_evidence_files(self, dispute_id: str) -> list[EvidenceFileMetadata]:
         self._require_case(dispute_id)
@@ -374,6 +408,54 @@ class SupabaseCaseRepository:
             .data
         )
         return [ResponseDraft.model_validate(row["draft_json"]) for row in rows]
+
+    def save_review(self, review: DraftReview) -> bool:
+        result = _rpc_status(
+            self.client,
+            "proofshield_review_response_draft",
+            {
+                "p_draft_id": review.draft_id,
+                "p_review_id": review.review_id,
+                "p_decision": str(review.decision),
+                "p_reviewer_label": review.reviewer_label,
+                "p_note": review.note,
+                "p_request_sha256": review.request_sha256,
+                "p_review_json": review.model_dump(mode="json"),
+                "p_created_at": review.created_at.isoformat(),
+            },
+        )
+        if result == "CREATED":
+            return True
+        if result == "EXISTS":
+            return False
+        if result == "DRAFT_NOT_FOUND":
+            raise DraftNotFoundError(
+                f"draft {review.draft_id} was not found for case {review.dispute_id}"
+            )
+        if result == "CONFLICT":
+            raise ReviewConflictError(
+                f"draft {review.draft_id} already has a different final review"
+            )
+        if result == "REJECTED":
+            raise ReviewConflictError("the review request failed validation")
+        raise CaseStoreError(f"unexpected save-review status: {result}")
+
+    def get_review(self, dispute_id: str, draft_id: str) -> DraftReview:
+        self.get_draft(dispute_id, draft_id)
+        rows = (
+            self.client.table("proofshield_draft_reviews")
+            .select("review_json")
+            .eq("draft_id", draft_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            raise ReviewNotFoundError(f"draft {draft_id} has not been reviewed")
+        review = DraftReview.model_validate(rows[0]["review_json"])
+        if review.dispute_id != dispute_id:
+            raise ReviewNotFoundError(f"draft {draft_id} has not been reviewed")
+        return review
 
     def get_history(self, dispute_id: str) -> list[CaseHistoryEntry]:
         self._require_case(dispute_id)

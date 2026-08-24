@@ -17,11 +17,19 @@ from proofshield.case_store import (
     DraftNotFoundError,
     EvidenceConflictError,
     EvidenceFileMetadata,
+    EvidenceFileRecord,
+    ReviewConflictError,
+    ReviewNotFoundError,
     model_sha256,
 )
 from proofshield.domain import Assessment, Decision, DisputeCase, EvidenceDocument
 from proofshield.drafting import ResponseDraft
-from proofshield.file_store import StoredFileBlob, normalize_and_validate_file
+from proofshield.file_store import (
+    EvidenceFileUnavailable,
+    StoredFileBlob,
+    normalize_and_validate_file,
+)
+from proofshield.reviewing import DraftReview, ReviewDecision
 
 
 class InMemoryCaseRepository:
@@ -31,6 +39,7 @@ class InMemoryCaseRepository:
         self._evidence: dict[str, tuple[str, EvidenceDocument, str, datetime]] = {}
         self._files: dict[str, tuple[EvidenceFileMetadata, str]] = {}
         self._drafts: dict[str, ResponseDraft] = {}
+        self._reviews: dict[str, DraftReview] = {}
         self._history: list[CaseHistoryEntry] = []
         self._sequence = 0
 
@@ -133,13 +142,21 @@ class InMemoryCaseRepository:
     def get_evidence_file(
         self, dispute_id: str, file_id: str
     ) -> EvidenceFileMetadata:
+        return self.get_evidence_file_record(dispute_id, file_id).metadata
+
+    def get_evidence_file_record(
+        self, dispute_id: str, file_id: str
+    ) -> EvidenceFileRecord:
         with self._lock:
             row = self._files.get(file_id)
             if row is None or row[0].dispute_id != dispute_id:
                 raise CaseNotFoundError(
                     f"evidence file {file_id} was not found for case {dispute_id}"
                 )
-            return row[0].model_copy(deep=True)
+            return EvidenceFileRecord(
+                metadata=row[0].model_copy(deep=True),
+                storage_key=row[1],
+            )
 
     def list_evidence_files(self, dispute_id: str) -> list[EvidenceFileMetadata]:
         with self._lock:
@@ -251,6 +268,52 @@ class InMemoryCaseRepository:
                 reverse=True,
             )
 
+    def save_review(self, review: DraftReview) -> bool:
+        with self._lock:
+            draft = self._drafts.get(review.draft_id)
+            if draft is None or draft.dispute_id != review.dispute_id:
+                raise DraftNotFoundError(
+                    f"draft {review.draft_id} was not found for case {review.dispute_id}"
+                )
+            existing = self._reviews.get(review.draft_id)
+            if existing is not None:
+                if existing.request_sha256 == review.request_sha256:
+                    return False
+                raise ReviewConflictError(
+                    f"draft {review.draft_id} already has a different final review"
+                )
+            self._reviews[review.draft_id] = review.model_copy(deep=True)
+            case, digest, _updated = self._cases[review.dispute_id]
+            self._cases[review.dispute_id] = (case, digest, review.created_at)
+            action = (
+                CaseHistoryAction.DRAFT_APPROVED
+                if review.decision == ReviewDecision.APPROVED
+                else CaseHistoryAction.DRAFT_REJECTED
+            )
+            self._append_history(
+                review.dispute_id,
+                action,
+                review.review_id,
+                (
+                    f"Draft {review.decision.value.lower()}; "
+                    f"reviewer_label={review.reviewer_label}."
+                ),
+                review.created_at,
+            )
+            return True
+
+    def get_review(self, dispute_id: str, draft_id: str) -> DraftReview:
+        with self._lock:
+            draft = self._drafts.get(draft_id)
+            if draft is None or draft.dispute_id != dispute_id:
+                raise DraftNotFoundError(
+                    f"draft {draft_id} was not found for case {dispute_id}"
+                )
+            review = self._reviews.get(draft_id)
+            if review is None:
+                raise ReviewNotFoundError(f"draft {draft_id} has not been reviewed")
+            return review.model_copy(deep=True)
+
     def get_history(self, dispute_id: str) -> list[CaseHistoryEntry]:
         with self._lock:
             self._require_case(dispute_id)
@@ -309,6 +372,14 @@ class InMemoryEvidenceFileStore:
 
     def delete(self, storage_key: str) -> None:
         self.blobs.pop(storage_key, None)
+
+    def read(self, storage_key: str) -> bytes:
+        try:
+            return self.blobs[storage_key]
+        except KeyError as error:
+            raise EvidenceFileUnavailable(
+                "a cited evidence file could not be read from private storage"
+            ) from error
 
 
 class InMemoryEventLedger:

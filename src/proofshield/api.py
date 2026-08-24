@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 from enum import StrEnum
 from typing import Annotated
 
@@ -23,6 +24,8 @@ from proofshield.case_store import (
     DraftNotFoundError,
     EvidenceConflictError,
     EvidenceFileMetadata,
+    ReviewConflictError,
+    ReviewNotFoundError,
     new_file_id,
 )
 from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
@@ -37,8 +40,15 @@ from proofshield.file_store import (
     EvidenceFileError,
     EvidenceFileStore,
     EvidenceFileTooLarge,
+    EvidenceFileUnavailable,
     UnsupportedEvidenceFile,
     safe_original_name,
+)
+from proofshield.packet import EvidencePacketError, build_evidence_packet
+from proofshield.reviewing import (
+    DraftReview,
+    DraftReviewRequest,
+    create_draft_review,
 )
 from proofshield.supabase_runtime import (
     SupabaseConfigurationError,
@@ -75,6 +85,7 @@ class WebhookReceipt(BaseModel):
 def create_app(
     *,
     webhook_secret: str | None = None,
+    operator_secret: str | None = None,
     case_repository: CaseRepository | None = None,
     evidence_file_store: EvidenceFileStore | None = None,
     webhook_ledger: EventLedger | None = None,
@@ -89,6 +100,9 @@ def create_app(
     assessor = CaseAssessor()
     draft_generator = EvidenceGroundedDraftGenerator()
     configured_secret = webhook_secret or os.getenv("RAZORPAY_WEBHOOK_SECRET")
+    configured_operator_secret = operator_secret or os.getenv(
+        "PROOFSHIELD_OPERATOR_SECRET"
+    )
 
     supplied_components = (case_repository, evidence_file_store, webhook_ledger)
     if any(component is not None for component in supplied_components) and not all(
@@ -145,6 +159,23 @@ def create_app(
                 detail="Supabase webhook persistence is not configured.",
             )
         return configured_ledger
+
+    def require_operator_secret(supplied_secret: str | None) -> None:
+        if configured_operator_secret is None or len(configured_operator_secret) < 32:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "PROOFSHIELD_OPERATOR_SECRET must be configured with at least "
+                    "32 characters."
+                ),
+            )
+        if supplied_secret is None or not secrets.compare_digest(
+            supplied_secret, configured_operator_secret
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="A valid ProofShield operator secret is required.",
+            )
 
     @application.get("/health")
     def health(response: Response) -> dict[str, str]:
@@ -405,6 +436,114 @@ def create_app(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(error),
             ) from error
+
+    @application.post(
+        "/v1/cases/{dispute_id}/drafts/{draft_id}/reviews",
+        response_model=DraftReview,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def review_case_draft(
+        dispute_id: str,
+        draft_id: str,
+        request: DraftReviewRequest,
+        response: Response,
+        x_proofshield_operator_secret: Annotated[str | None, Header()] = None,
+    ) -> DraftReview:
+        require_operator_secret(x_proofshield_operator_secret)
+        try:
+            cases().get_draft(dispute_id, draft_id)
+            review = create_draft_review(dispute_id, draft_id, request)
+            created = cases().save_review(review)
+            stored = cases().get_review(dispute_id, draft_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except DraftNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except ReviewConflictError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return stored
+
+    @application.get(
+        "/v1/cases/{dispute_id}/drafts/{draft_id}/review",
+        response_model=DraftReview,
+    )
+    def get_case_draft_review(
+        dispute_id: str,
+        draft_id: str,
+        x_proofshield_operator_secret: Annotated[str | None, Header()] = None,
+    ) -> DraftReview:
+        require_operator_secret(x_proofshield_operator_secret)
+        try:
+            return cases().get_review(dispute_id, draft_id)
+        except (CaseNotFoundError, DraftNotFoundError, ReviewNotFoundError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.get(
+        "/v1/cases/{dispute_id}/drafts/{draft_id}/packet",
+        response_class=Response,
+    )
+    def download_case_evidence_packet(
+        dispute_id: str,
+        draft_id: str,
+        x_proofshield_operator_secret: Annotated[str | None, Header()] = None,
+    ) -> Response:
+        require_operator_secret(x_proofshield_operator_secret)
+        try:
+            case = cases().get_case(dispute_id)
+            draft = cases().get_draft(dispute_id, draft_id)
+            review = cases().get_review(dispute_id, draft_id)
+            source_files = []
+            for citation in draft.citations:
+                record = cases().get_evidence_file_record(
+                    dispute_id, citation.source_file_id
+                )
+                source_files.append((record, files().read(record.storage_key)))
+            packet = build_evidence_packet(case, draft, review, source_files)
+        except (CaseNotFoundError, DraftNotFoundError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except ReviewNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="the draft must be approved before its packet can be exported",
+            ) from error
+        except EvidenceFileUnavailable as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(error),
+            ) from error
+        except EvidencePacketError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        return Response(
+            content=packet.content,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="proofshield-evidence-packet.zip"'
+                ),
+                "X-ProofShield-Packet-SHA256": packet.sha256,
+                "X-ProofShield-Manifest-SHA256": packet.manifest_sha256,
+            },
+        )
 
     @application.get(
         "/v1/cases/{dispute_id}/history",

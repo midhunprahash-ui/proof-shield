@@ -34,6 +34,10 @@ class MalformedEvidenceFile(EvidenceFileError):
     pass
 
 
+class EvidenceFileUnavailable(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class StoredFileBlob:
     storage_key: str
@@ -52,6 +56,8 @@ class EvidenceFileStore(Protocol):
     ) -> StoredFileBlob: ...
 
     def delete(self, storage_key: str) -> None: ...
+
+    def read(self, storage_key: str) -> bytes: ...
 
 
 def safe_original_name(value: str | None) -> str:
@@ -135,3 +141,11 @@ class SupabaseEvidenceFileStore:
 
     def delete(self, storage_key: str) -> None:
         self.client.storage.from_(self.bucket).remove([storage_key])
+
+    def read(self, storage_key: str) -> bytes:
+        try:
+            return self.client.storage.from_(self.bucket).download(storage_key)
+        except Exception as error:
+            raise EvidenceFileUnavailable(
+                "a cited evidence file could not be read from private storage"
+            ) from error

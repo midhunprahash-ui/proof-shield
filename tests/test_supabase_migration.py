@@ -6,6 +6,9 @@ MIGRATION = Path(
 DRAFT_MIGRATION = Path(
     "supabase/migrations/20260823170424_response_drafts.sql"
 )
+REVIEW_MIGRATION = Path(
+    "supabase/migrations/20260824070552_draft_reviews_and_evidence_packets.sql"
+)
 TABLES = {
     "proofshield_cases",
     "proofshield_evidence",
@@ -72,3 +75,19 @@ def test_response_drafts_are_backend_only_and_human_approved() -> None:
     assert "security invoker" in sql
     assert "from public, anon, authenticated;" in sql
     assert "proofshield_response_drafts_dispute_id_idx" in sql
+
+
+def test_draft_reviews_are_immutable_backend_only_decisions() -> None:
+    sql = REVIEW_MIGRATION.read_text(encoding="utf-8")
+
+    assert "create table public.proofshield_draft_reviews" in sql
+    assert "primary key" in sql
+    assert "references public.proofshield_response_drafts" in sql
+    assert "alter table public.proofshield_draft_reviews enable row level security;" in sql
+    assert "from anon, authenticated, service_role;" in sql
+    assert "grant select, insert" in sql
+    assert "DRAFT_APPROVED" in sql
+    assert "DRAFT_REJECTED" in sql
+    assert "on conflict (draft_id) do nothing" in sql
+    assert "security invoker" in sql
+    assert "from public, anon, authenticated;" in sql

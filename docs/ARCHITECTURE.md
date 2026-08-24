@@ -35,7 +35,16 @@ Evidence-grounded draft gate
        |
        v
 PENDING_HUMAN_APPROVAL
+       |
+       v
+Operator-secret-protected human review
+  - immutable APPROVED or REJECTED decision
+  - exact retries are idempotent
   - no automatic submission
+       |
+       v
+Approved -> tamper-evident evidence ZIP
+Rejected -> no export
 ```
 
 ## Current webhook flow
@@ -141,3 +150,10 @@ than opening the current backend tables directly.
 Response drafts use the same boundary. They are append-only through the trusted
 backend, transactionally add one `DRAFT_CREATED` history event, and cannot be
 read directly by browser roles.
+
+Draft reviews are also append-only and backend-only. The local API adds a
+separate operator-secret check before allowing review actions or raw evidence
+downloads. Approval does not submit a response; it only unlocks a deterministic
+ZIP whose cited Storage objects are re-hashed before inclusion. Supabase Auth
+and named operator identities will replace the shared operator gate when the
+frontend is built.

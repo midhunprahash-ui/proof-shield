@@ -20,6 +20,12 @@ citations. The draft is stored as `PENDING_HUMAN_APPROVAL`; it is never submitte
 automatically. No model training or LLM call is required for this trusted
 baseline.
 
+An operator-secret-protected reviewer can now approve or reject that draft once.
+Approval unlocks a deterministic ZIP containing the response, review, manifest,
+and cited source files after their Storage bytes pass fresh SHA-256 checks.
+Rejection or missing approval blocks export. Razorpay submission is still not
+implemented.
+
 ## Why this architecture
 
 The project intentionally separates two jobs:
@@ -43,7 +49,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 cp .env.example .env
-# Add the backend-only Supabase secret key and Razorpay webhook secret to .env.
+# Add the backend-only Supabase, webhook, and ProofShield operator secrets.
 set -a
 source .env
 set +a
@@ -91,12 +97,20 @@ template so near-duplicate documents cannot leak between development and test.
 - `POST /v1/cases/{dispute_id}/drafts`
 - `GET /v1/cases/{dispute_id}/drafts`
 - `GET /v1/cases/{dispute_id}/drafts/{draft_id}`
+- `POST /v1/cases/{dispute_id}/drafts/{draft_id}/reviews`
+- `GET /v1/cases/{dispute_id}/drafts/{draft_id}/review`
+- `GET /v1/cases/{dispute_id}/drafts/{draft_id}/packet`
 - `GET /v1/cases/{dispute_id}/history`
 
 The webhook receiver requires:
 
 - `X-Razorpay-Signature`: HMAC-SHA256 over the exact raw request bytes.
 - `x-razorpay-event-id`: Razorpay's unique event identifier for duplicate protection.
+
+Review and evidence-packet endpoints require
+`X-ProofShield-Operator-Secret`. Configure a separate
+`PROOFSHIELD_OPERATOR_SECRET` of at least 32 characters in the trusted backend.
+The current reviewer label is an audit label, not a Supabase Auth identity.
 
 Webhook idempotency, response-draft idempotency, and append-only audit trails are stored transactionally
 in Supabase Postgres. Cases, evidence metadata, structured evidence, and case
@@ -127,3 +141,5 @@ activation and verification record.
 See [Milestone 5](docs/MILESTONE_5_LIVE_INTEGRATION.md) for the local Python to
 live Supabase integration result. See [Milestone 6](docs/MILESTONE_6_RESPONSE_DRAFTS.md)
 for the cited drafting gate, idempotency, persistence, and live verification.
+See [Milestone 7](docs/MILESTONE_7_HUMAN_REVIEW_AND_PACKETS.md) for immutable
+human decisions, operator authorization, and tamper-evident evidence packets.
