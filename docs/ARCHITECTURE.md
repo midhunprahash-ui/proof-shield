@@ -45,6 +45,12 @@ Operator-secret-protected human review
        v
 Approved -> tamper-evident evidence ZIP
 Rejected -> no export
+       ^
+       |
+React merchant console (Bun bundle)
+  - local FastAPI calls only
+  - no direct Supabase access
+  - operator secret kept in page memory only
 ```
 
 ## Current webhook flow
@@ -155,5 +161,25 @@ Draft reviews are also append-only and backend-only. The local API adds a
 separate operator-secret check before allowing review actions or raw evidence
 downloads. Approval does not submit a response; it only unlocks a deterministic
 ZIP whose cited Storage objects are re-hashed before inclusion. Supabase Auth
-and named operator identities will replace the shared operator gate when the
-frontend is built.
+and named operator identities will replace the shared operator gate before
+deployment. The current local frontend holds the operator secret only in React
+memory for the active page and never persists it or includes it in its bundle.
+
+## Current frontend boundary
+
+```text
+React + TypeScript merchant console
+       |
+       | local HTTP, restricted CORS origins
+       v
+FastAPI validation and authorization
+       |
+       | backend-only secret key
+       v
+Supabase Postgres + private Storage
+```
+
+The browser can list cases, upload a reviewed source, add structured evidence,
+run the verifier, create a cited draft, record one protected human decision,
+download an approved packet, and view case history. It cannot access Supabase
+tables or Storage directly and it cannot submit a response to Razorpay.

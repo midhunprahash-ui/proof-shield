@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Annotated
 
 from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
 from proofshield import __version__
@@ -96,6 +97,23 @@ def create_app(
         description=(
             "Human-approved evidence assessment for product-not-received chargebacks."
         ),
+    )
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins(),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=[
+            "Accept",
+            "Content-Type",
+            "X-ProofShield-Operator-Secret",
+        ],
+        expose_headers=[
+            "Content-Disposition",
+            "X-ProofShield-Packet-SHA256",
+            "X-ProofShield-Manifest-SHA256",
+        ],
+        max_age=600,
     )
     assessor = CaseAssessor()
     draft_generator = EvidenceGroundedDraftGenerator()
@@ -740,6 +758,14 @@ def create_app(
         )
 
     return application
+
+
+def _cors_origins() -> list[str]:
+    configured = os.getenv(
+        "PROOFSHIELD_CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    )
+    return [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
 
 
 app = create_app()

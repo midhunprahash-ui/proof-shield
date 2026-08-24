@@ -86,3 +86,21 @@ def test_rejects_datetime_without_timezone() -> None:
     response = client.post("/v1/assessments", json=case)
 
     assert response.status_code == 422
+
+
+def test_local_frontend_origin_is_allowed_without_credentials() -> None:
+    response = client.options(
+        "/v1/cases",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "X-ProofShield-Operator-Secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert response.headers.get("access-control-allow-credentials") is None
+    assert "x-proofshield-operator-secret" in response.headers[
+        "access-control-allow-headers"
+    ].lower()
