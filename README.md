@@ -26,6 +26,11 @@ and cited source files after their Storage bytes pass fresh SHA-256 checks.
 Rejection or missing approval blocks export. Razorpay submission is still not
 implemented.
 
+The local merchant console is now built with React and bundled by Bun. It gives
+the operator one workspace for the dispute queue, evidence upload and reviewed
+fact entry, deterministic assessment, cited response drafting, final human
+review, packet download, and the append-only audit timeline.
+
 ## Why this architecture
 
 The project intentionally separates two jobs:
@@ -57,8 +62,43 @@ uvicorn proofshield.api:app --reload
 ```
 
 Open `http://127.0.0.1:8000/docs` for the interactive API documentation.
+
+In a second terminal, start the React merchant console:
+
+```bash
+cd frontend
+bun install --frozen-lockfile
+bun run dev
+```
+
+Open `http://localhost:3000`. The frontend calls only the local FastAPI API. Its
+default API URL is configured by the `proofshield-api-url` meta tag in
+`frontend/index.html`. Never place a Supabase, Razorpay, or operator secret in
+that file or any frontend source.
+
+Protected review controls ask for `PROOFSHIELD_OPERATOR_SECRET` at action time.
+For this local-only milestone it is held in React memory for the current page
+session and sent only to the local backend. It is never persisted or included in
+the bundle. Supabase Auth with named operator identities is required before any
+deployment.
+
 The foundation migration is [`supabase/migrations/20260823160507_proofshield_supabase_foundation.sql`](supabase/migrations/20260823160507_proofshield_supabase_foundation.sql).
 It is active on project `qoujhmqkjicvcwoiyqkp`.
+
+The human-review and foreign-key-index migrations are also active. A guarded
+live-demo runner can verify the complete trusted-backend workflow while making
+its synthetic-data retention explicit:
+
+```bash
+PYTHONPATH=src python scripts/run_live_demo.py \
+  --confirm-live-write \
+  --project-ref qoujhmqkjicvcwoiyqkp \
+  --label your_unique_demo_label
+```
+
+This command requires the backend Supabase configuration and a separate
+`PROOFSHIELD_OPERATOR_SECRET` of at least 32 characters. It refuses a different
+project reference and does not print credentials.
 
 The backend accepts `SUPABASE_SECRET_KEY` (preferred) or the legacy
 `SUPABASE_SERVICE_ROLE_KEY`. Never expose either value to browser code. The
@@ -69,6 +109,8 @@ ProofShield refuses to start its persistence layer against the wrong project.
 
 ```bash
 pytest
+cd frontend
+bun run check
 ```
 
 ## Generate deterministic example cases
@@ -123,7 +165,8 @@ are accepted, and the declared content type must match the file bytes.
 
 All ProofShield tables have Row Level Security enabled. There are deliberately
 no `anon` or `authenticated` policies yet; only the trusted backend can access
-them. Frontend access will be designed later alongside user ownership and Auth.
+them. The frontend never connects to Supabase directly. User ownership and
+narrowly scoped Auth policies will be designed before deployment.
 
 This project is **not being deployed now**. Supabase is the initial managed data
 platform, but the backend and frontend remain local. Other hosting can be added
@@ -143,3 +186,8 @@ live Supabase integration result. See [Milestone 6](docs/MILESTONE_6_RESPONSE_DR
 for the cited drafting gate, idempotency, persistence, and live verification.
 See [Milestone 7](docs/MILESTONE_7_HUMAN_REVIEW_AND_PACKETS.md) for immutable
 human decisions, operator authorization, and tamper-evident evidence packets.
+See [Milestone 8](docs/MILESTONE_8_MERCHANT_DASHBOARD.md) for the React and Bun
+merchant console, browser security boundary, and verification record.
+See [Milestone 9](docs/MILESTONE_9_LIVE_REVIEW_DEMO.md) for the live review
+migration, guarded synthetic demo, tamper-evident packet, and Supabase audit
+verification.

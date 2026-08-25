@@ -1,0 +1,86 @@
+import { describe, expect, test } from "bun:test";
+
+import { apiUrlFromDocument, ApiError, ProofShieldApi } from "./api";
+
+function jsonResponse(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    headers: { "Content-Type": "application/json" },
+    status,
+  });
+}
+
+describe("ProofShieldApi", () => {
+  test("loads the four case workspace resources in parallel", async () => {
+    const requested: string[] = [];
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.endsWith("/files")) return jsonResponse([]);
+      if (url.endsWith("/drafts")) return jsonResponse([]);
+      if (url.endsWith("/history")) return jsonResponse([]);
+      return jsonResponse({ dispute_id: "dp_123" });
+    }) as typeof fetch;
+    const api = new ProofShieldApi("http://api.local", fetcher);
+
+    const workspace = await api.getWorkspace("dp_123");
+
+    expect(workspace.case.dispute_id).toBe("dp_123");
+    expect(requested).toHaveLength(4);
+    expect(new Set(requested)).toEqual(
+      new Set([
+        "http://api.local/v1/cases/dp_123",
+        "http://api.local/v1/cases/dp_123/files",
+        "http://api.local/v1/cases/dp_123/drafts",
+        "http://api.local/v1/cases/dp_123/history",
+      ]),
+    );
+  });
+
+  test("sends operator authority in a header and not in the request body", async () => {
+    let captured: RequestInit | undefined;
+    const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured = init;
+      return jsonResponse({
+        review_id: "review_1",
+        decision: "APPROVED",
+      });
+    }) as typeof fetch;
+    const api = new ProofShieldApi("http://api.local", fetcher);
+
+    await api.getReview("dp_1", "draft_1", "s".repeat(32));
+
+    expect(new Headers(captured?.headers).get("X-ProofShield-Operator-Secret")).toBe(
+      "s".repeat(32),
+    );
+    expect(captured?.body).toBeUndefined();
+    expect("operatorSecret" in (captured ?? {})).toBe(false);
+  });
+
+  test("surfaces FastAPI validation detail as a readable error", async () => {
+    const fetcher = (async () =>
+      jsonResponse(
+        { detail: [{ msg: "Field required" }, { msg: "Invalid amount" }] },
+        422,
+      )) as unknown as typeof fetch;
+    const api = new ProofShieldApi("http://api.local", fetcher);
+
+    let caught: unknown;
+    try {
+      await api.listCases();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).status).toBe(422);
+    expect((caught as ApiError).message).toBe("Field required; Invalid amount");
+  });
+
+  test("reads and normalizes the backend URL from document metadata", () => {
+    const fakeDocument = {
+      querySelector: () => ({ content: "http://127.0.0.1:8000/" }),
+    } as unknown as Document;
+
+    expect(apiUrlFromDocument(fakeDocument)).toBe("http://127.0.0.1:8000");
+  });
+});
