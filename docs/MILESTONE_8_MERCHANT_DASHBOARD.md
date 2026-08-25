@@ -96,24 +96,22 @@ bundle. Milestone verification completed with:
 
 The connected live Supabase project returned successful empty-queue responses
 during this verification, and the browser recovered through its explicit error
-state and retry path. The same session also observed intermittent upstream
+state and retry path. That session also observed intermittent upstream
 `JWT issued at future` and HTTP/2 disconnect errors, so uninterrupted live
-Supabase stability is not yet claimed. No synthetic rows were added to the live
-project merely for a UI screenshot. Backend contract tests continue to cover
+Supabase stability was not claimed at the time. No synthetic rows were added in
+Milestone 8 merely for a UI screenshot. Milestone 9 later added one clearly
+labelled synthetic case through the guarded trusted-backend flow. Backend contract tests continue to cover
 evidence, drafting, review, authorization, immutability, and packet generation.
 
 ## Known boundary
 
-Milestone 7's draft-review migration still needs live MCP activation and live
-Supabase verification. The dashboard code and API contract are ready for it,
-but protected review actions should not be called against the live project
-until that migration is confirmed. This does not block local frontend build,
-type, API-contract, or browser verification.
+Milestone 7's draft-review migration is now active and live-verified. The local
+dashboard may exercise protected review actions against the configured
+ProofShield project. It still uses a temporary shared operator secret, so the
+frontend and API must not be deployed until named authentication and ownership
+controls replace that gate.
 
 ## Next milestone
 
-Activate and verify the Milestone 7 review migration, then seed a clearly
-labelled demonstration case through the trusted backend and run a recorded
-end-to-end merchant workflow. Recheck machine/Supabase clock agreement and the
-HTTP transport if the transient live errors recur. Authentication and
-deployment remain later, separate decisions.
+Replace the local shared operator gate with named Supabase Auth identities and
+ownership-aware RLS. Deployment remains a later, separate decision.
