@@ -85,6 +85,21 @@ deployment.
 The foundation migration is [`supabase/migrations/20260823160507_proofshield_supabase_foundation.sql`](supabase/migrations/20260823160507_proofshield_supabase_foundation.sql).
 It is active on project `qoujhmqkjicvcwoiyqkp`.
 
+The human-review and foreign-key-index migrations are also active. A guarded
+live-demo runner can verify the complete trusted-backend workflow while making
+its synthetic-data retention explicit:
+
+```bash
+PYTHONPATH=src python scripts/run_live_demo.py \
+  --confirm-live-write \
+  --project-ref qoujhmqkjicvcwoiyqkp \
+  --label your_unique_demo_label
+```
+
+This command requires the backend Supabase configuration and a separate
+`PROOFSHIELD_OPERATOR_SECRET` of at least 32 characters. It refuses a different
+project reference and does not print credentials.
+
 The backend accepts `SUPABASE_SECRET_KEY` (preferred) or the legacy
 `SUPABASE_SERVICE_ROLE_KEY`. Never expose either value to browser code. The
 configured `SUPABASE_PROJECT_REF` must match the hostname in `SUPABASE_URL`, so
@@ -173,3 +188,6 @@ See [Milestone 7](docs/MILESTONE_7_HUMAN_REVIEW_AND_PACKETS.md) for immutable
 human decisions, operator authorization, and tamper-evident evidence packets.
 See [Milestone 8](docs/MILESTONE_8_MERCHANT_DASHBOARD.md) for the React and Bun
 merchant console, browser security boundary, and verification record.
+See [Milestone 9](docs/MILESTONE_9_LIVE_REVIEW_DEMO.md) for the live review
+migration, guarded synthetic demo, tamper-evident packet, and Supabase audit
+verification.

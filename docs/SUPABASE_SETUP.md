@@ -25,11 +25,15 @@ The source-of-truth migrations are:
 ```text
 supabase/migrations/20260823160507_proofshield_supabase_foundation.sql
 supabase/migrations/20260823170424_response_drafts.sql
+supabase/migrations/20260824070552_draft_reviews_and_evidence_packets.sql
+supabase/migrations/20260825080000_draft_reviews_foreign_key_index.sql
 ```
 
-They were applied on 2026-08-23 and are recorded by Supabase as migration
-versions `20260823160507` and `20260823170424`. Before any future schema change, use the
-`supabase-proofshield` MCP `get_project_url` tool and confirm the result is exactly:
+The first two were applied on 2026-08-23. The review and index migrations were
+applied on 2026-08-25. Supabase records the four remote migration versions as
+`20260823160507`, `20260823170424`, `20260825073901`, and `20260825074158`.
+Before any future schema change, use the `supabase-proofshield` MCP
+`get_project_url` tool and confirm the result is exactly:
 
 ```text
 https://qoujhmqkjicvcwoiyqkp.supabase.co
@@ -37,20 +41,10 @@ https://qoujhmqkjicvcwoiyqkp.supabase.co
 
 Do not run ProofShield migrations through the older `supabase` connection.
 
-The next repository migration is present locally but is not yet active:
-
-```text
-supabase/migrations/20260824070552_draft_reviews_and_evidence_packets.sql
-```
-
-It must be tested and applied through `supabase-proofshield` in a task where
-that MCP connection is loaded. After activation, update this section with the
-recorded remote migration version and live verification result.
-
 The migrations create:
 
-- seven RLS-enabled `proofshield_*` tables for cases, evidence, response drafts,
-  history, webhook state, and append-only audit entries;
+- eight RLS-enabled `proofshield_*` tables for cases, evidence, response drafts,
+  immutable human reviews, history, webhook state, and append-only audit entries;
 - transaction-safe Postgres RPCs for case, draft, and webhook idempotency;
 - indexes for every foreign key and primary read path;
 - a private `proofshield-evidence` Storage bucket with a 5 MB limit and MIME
@@ -65,7 +59,15 @@ The activation verification confirmed:
 3. anonymous and authenticated roles cannot access tables or RPCs;
 4. service-role case, evidence, draft, history, and webhook transactions work;
 5. replay and conflict results are deterministic;
-6. all synthetic verification data was removed after the test.
+6. the composite human-review foreign key has a covering index;
+7. the live Milestone 9 demo retained one intentionally labelled synthetic case,
+   `demo_disp_m9_20260825`, for local dashboard demonstrations.
+
+The advisor's `RLS Enabled No Policy` notices are intentional at this stage:
+browser roles have no grants or policies, and only the trusted backend uses the
+service role. `Unused Index` notices are expected for a new, nearly empty demo
+database and are not recommendations to remove the required primary-read and
+foreign-key indexes.
 
 ## Backend environment
 

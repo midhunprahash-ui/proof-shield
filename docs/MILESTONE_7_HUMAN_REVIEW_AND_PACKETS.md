@@ -77,7 +77,7 @@ same transaction.
 
 ## Verification status
 
-Local verification currently proves:
+Local and live verification prove:
 
 - operator authorization fails closed;
 - approval/rejection validation and exact-retry idempotency;
@@ -85,15 +85,19 @@ Local verification currently proves:
 - rejected and unreviewed drafts cannot export;
 - repeated approved exports are byte-identical;
 - ZIP contents and response hashes match; and
-- changed evidence bytes are detected before export.
+- changed evidence bytes are detected before export;
+- the migration is active on the intended project with RLS enabled;
+- `anon` and `authenticated` have no review-table or RPC privileges;
+- `service_role` has only `SELECT`/`INSERT` and RPC execution;
+- the RPC is `SECURITY INVOKER` with an empty `search_path`; and
+- one labelled synthetic case completed review and deterministic packet export.
 
-Live migration activation and live Supabase integration verification remain
-pending because the current Codex task did not load the already-registered
-`supabase-proofshield` MCP tools. Start a new Codex task/session and confirm the
-connection before applying this migration. Do not use the unrelated `supabase`
-connection.
+Supabase records the review migration as remote version `20260825073901` and
+the covering-index follow-up as `20260825074158`. See Milestone 9 for the exact
+live verification record. Do not use the unrelated `supabase` connection.
 
 ## Next milestone
 
-After live activation, build the merchant review interface around these APIs.
-Razorpay submission remains deliberately out of scope.
+Replace the temporary shared operator secret with named Supabase Auth users and
+ownership-aware RLS before deployment. Razorpay submission remains deliberately
+out of scope.
