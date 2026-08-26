@@ -6,6 +6,7 @@ import type {
   DisputeCase,
   DraftReview,
   EvidenceDocument,
+  EvidenceExtractionProposal,
   EvidenceFileMetadata,
   EvidenceSubmission,
   OperatorIdentity,
@@ -168,6 +169,21 @@ export class ProofShieldApi {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(submission),
+      },
+    );
+  }
+
+  extractEvidence(
+    disputeId: string,
+    fileId: string,
+    evidenceType: EvidenceDocument["evidence_type"],
+  ): Promise<EvidenceExtractionProposal> {
+    return this.request<EvidenceExtractionProposal>(
+      `/v1/cases/${encodeURIComponent(disputeId)}/files/${encodeURIComponent(fileId)}/extract`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ evidence_type: evidenceType }),
       },
     );
   }

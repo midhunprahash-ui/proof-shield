@@ -4,6 +4,7 @@ import type { ProofShieldApi } from "../api";
 import { evidenceTypeLabel, formatBytes, formatDateTime, shortId } from "../lib/format";
 import type {
   DisputeCase,
+  EvidenceExtractionProposal,
   EvidenceFileMetadata,
   EvidenceSubmission,
   EvidenceType,
@@ -26,9 +27,14 @@ export function EvidencePanel({
 }) {
   const [uploading, setUploading] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [proposal, setProposal] = useState<EvidenceExtractionProposal | null>(null);
   const [evidenceType, setEvidenceType] = useState<EvidenceType>("INVOICE");
   const [sourceFileId, setSourceFileId] = useState(files[0]?.file_id ?? "");
   const [confirmed, setConfirmed] = useState(false);
+  const [orderId, setOrderId] = useState(caseData.order_id);
+  const [paymentId, setPaymentId] = useState(caseData.payment_id);
+  const [amount, setAmount] = useState(caseData.disputed_amount);
   const [deliveryStatus, setDeliveryStatus] = useState("delivered");
   const [customerAcknowledged, setCustomerAcknowledged] = useState(false);
   const [text, setText] = useState("");
@@ -55,10 +61,10 @@ export function EvidencePanel({
       evidence_type: evidenceType,
       source_file_id: sourceFileId,
       human_confirmed_source: true,
-      order_id: caseData.order_id,
-      payment_id: caseData.payment_id,
     };
-    if (evidenceType === "INVOICE") submission.amount = caseData.disputed_amount;
+    if (orderId.trim()) submission.order_id = orderId.trim();
+    if (paymentId.trim()) submission.payment_id = paymentId.trim();
+    if (evidenceType === "INVOICE" && amount.trim()) submission.amount = amount.trim();
     if (evidenceType === "DELIVERY_PROOF") {
       submission.delivery_status = deliveryStatus.trim();
     }
@@ -79,6 +85,52 @@ export function EvidencePanel({
     } finally {
       setAdding(false);
     }
+  }
+
+  async function extractProposal() {
+    if (!sourceFileId) return;
+    setExtracting(true);
+    try {
+      const result = await api.extractEvidence(
+        caseData.dispute_id,
+        sourceFileId,
+        evidenceType,
+      );
+      setProposal(result);
+      setConfirmed(false);
+      notify(
+        result.claims.length > 0
+          ? `${result.claims.length} proposed facts found. Review every value before use.`
+          : "No supported labelled facts were found.",
+        result.claims.length > 0 ? "good" : "danger",
+      );
+    } catch (error) {
+      setProposal(null);
+      notify(error instanceof Error ? error.message : "Extraction failed.", "danger");
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  function useProposal() {
+    if (!proposal) return;
+    const claims = new Map(proposal.claims.map((claim) => [claim.field, claim.value]));
+    const proposedOrder = claims.get("order_id");
+    const proposedPayment = claims.get("payment_id");
+    const proposedAmount = claims.get("amount");
+    const proposedStatus = claims.get("delivery_status");
+    const proposedAcknowledgement = claims.get("customer_acknowledged_delivery");
+    const proposedText = claims.get("text");
+    if (typeof proposedOrder === "string") setOrderId(proposedOrder);
+    if (typeof proposedPayment === "string") setPaymentId(proposedPayment);
+    if (typeof proposedAmount === "string") setAmount(proposedAmount);
+    if (typeof proposedStatus === "string") setDeliveryStatus(proposedStatus);
+    if (typeof proposedAcknowledgement === "boolean") {
+      setCustomerAcknowledged(proposedAcknowledgement);
+    }
+    if (typeof proposedText === "string") setText(proposedText);
+    setConfirmed(false);
+    notify("Proposal copied into the review form. It is still unverified.", "good");
   }
 
   return (
@@ -167,19 +219,27 @@ export function EvidencePanel({
           </label>
         </article>
 
-        <article className="detail-card span-two">
+        <article className="detail-card extraction-card">
           <div className="card-heading">
             <div>
               <p className="eyebrow">Step 2</p>
-              <h3>Record reviewed facts</h3>
+              <h3>Extract proposed facts</h3>
             </div>
-            <StatusBadge tone="blue">Human confirmed</StatusBadge>
+            <StatusBadge tone="warning">Never auto-verified</StatusBadge>
           </div>
-          <div className="form-grid evidence-form">
+          <p className="muted-copy">
+            The local baseline reads exact labels from JSON or text. Every value
+            keeps a source reference and must be reviewed before submission.
+          </p>
+          <div className="form-grid extraction-selectors">
             <label>
               Evidence type
               <select
-                onChange={(event) => setEvidenceType(event.target.value as EvidenceType)}
+                onChange={(event) => {
+                  setEvidenceType(event.target.value as EvidenceType);
+                  setProposal(null);
+                  setConfirmed(false);
+                }}
                 value={evidenceType}
               >
                 <option value="INVOICE">Invoice</option>
@@ -191,7 +251,11 @@ export function EvidencePanel({
               Source file
               <select
                 disabled={files.length === 0}
-                onChange={(event) => setSourceFileId(event.target.value)}
+                onChange={(event) => {
+                  setSourceFileId(event.target.value);
+                  setProposal(null);
+                  setConfirmed(false);
+                }}
                 value={sourceFileId}
               >
                 <option value="">Select an uploaded file</option>
@@ -200,6 +264,96 @@ export function EvidencePanel({
                 ))}
               </select>
             </label>
+          </div>
+          <button
+            className="secondary-button full-button"
+            disabled={!sourceFileId || extracting}
+            onClick={() => void extractProposal()}
+            type="button"
+          >
+            <Icon name="activity" size={16} />
+            {extracting ? "Extracting…" : "Propose facts from source"}
+          </button>
+          {proposal ? (
+            <div className="extraction-proposal">
+              {proposal.claims.map((claim) => (
+                <div key={claim.field}>
+                  <span>{claim.field.replaceAll("_", " ")}</span>
+                  <strong>{String(claim.value)}</strong>
+                  <small>
+                    {claim.source_reference} · {Math.round(claim.confidence * 100)} score
+                  </small>
+                </div>
+              ))}
+              {proposal.warnings.map((warning) => (
+                <p className="extraction-warning" key={warning}>
+                  <Icon name="warning" size={14} /> {warning}
+                </p>
+              ))}
+              {proposal.claims.length > 0 ? (
+                <button className="text-button" onClick={useProposal} type="button">
+                  Copy into review form <Icon name="arrow" size={15} />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </article>
+
+        <article className="detail-card span-two">
+          <div className="card-heading">
+            <div>
+              <p className="eyebrow">Step 3</p>
+              <h3>Record reviewed facts</h3>
+            </div>
+            <StatusBadge tone="blue">Human confirmed</StatusBadge>
+          </div>
+          <div className="form-grid evidence-form">
+            <label>
+              Evidence type
+              <select
+                onChange={(event) => {
+                  setEvidenceType(event.target.value as EvidenceType);
+                  setProposal(null);
+                  setConfirmed(false);
+                }}
+                value={evidenceType}
+              >
+                <option value="INVOICE">Invoice</option>
+                <option value="DELIVERY_PROOF">Delivery proof</option>
+                <option value="CUSTOMER_COMMUNICATION">Customer communication</option>
+              </select>
+            </label>
+            <label>
+              Source file
+              <select
+                disabled={files.length === 0}
+                onChange={(event) => {
+                  setSourceFileId(event.target.value);
+                  setProposal(null);
+                  setConfirmed(false);
+                }}
+                value={sourceFileId}
+              >
+                <option value="">Select an uploaded file</option>
+                {files.map((file) => (
+                  <option key={file.file_id} value={file.file_id}>{file.original_name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Order ID
+              <input onChange={(event) => setOrderId(event.target.value)} value={orderId} />
+            </label>
+            <label>
+              Payment ID
+              <input onChange={(event) => setPaymentId(event.target.value)} value={paymentId} />
+            </label>
+            {evidenceType === "INVOICE" ? (
+              <label>
+                Invoice amount
+                <input onChange={(event) => setAmount(event.target.value)} value={amount} />
+              </label>
+            ) : null}
             {evidenceType === "DELIVERY_PROOF" ? (
               <label>
                 Delivery status

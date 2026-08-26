@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 proofshield-generate = "proofshield.synthetic:main"
+proofshield-evaluate-extraction = "proofshield.extraction_evaluation:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -235,3 +235,58 @@ def test_unsupported_file_type_is_rejected(tmp_path) -> None:
     )
 
     assert response.status_code == 415
+
+
+def test_operator_extracts_unverified_invoice_proposals_from_owned_json(tmp_path) -> None:
+    client = make_client(tmp_path)
+    case = create_case(client, index=9)
+    uploaded = upload_file(
+        client,
+        case,
+        name="invoice.json",
+        content=(
+            "{"
+            f'"order_id":"{case["order_id"]}",'
+            f'"payment_id":"{case["payment_id"]}",'
+            f'"amount":"{case["disputed_amount"]}"'
+            "}"
+        ).encode(),
+        content_type="application/json",
+    )
+
+    response = client.post(
+        f'/v1/cases/{case["dispute_id"]}/files/{uploaded["file_id"]}/extract',
+        json={"evidence_type": "INVOICE"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_file_id"] == uploaded["file_id"]
+    assert body["human_confirmation_required"] is True
+    assert body["warnings"] == []
+    assert {claim["field"] for claim in body["claims"]} == {
+        "order_id",
+        "payment_id",
+        "amount",
+    }
+    assert "source_verified" not in body
+
+
+def test_local_extractor_refuses_to_pretend_it_can_read_pdf(tmp_path) -> None:
+    client = make_client(tmp_path)
+    case = create_case(client, index=10)
+    uploaded = upload_file(
+        client,
+        case,
+        name="invoice.pdf",
+        content=b"%PDF-1.4 synthetic invoice",
+        content_type="application/pdf",
+    )
+
+    response = client.post(
+        f'/v1/cases/{case["dispute_id"]}/files/{uploaded["file_id"]}/extract',
+        json={"evidence_type": "INVOICE"},
+    )
+
+    assert response.status_code == 415
+    assert "configured provider" in response.json()["detail"]
