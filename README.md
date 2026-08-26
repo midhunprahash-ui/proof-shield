@@ -34,6 +34,13 @@ the operator one workspace for the dispute queue, evidence upload and reviewed
 fact entry, deterministic assessment, cited response drafting, final human
 review, packet download, and the append-only audit timeline.
 
+Uploaded JSON and UTF-8 text evidence can also pass through a deterministic,
+provider-independent extraction baseline. It returns proposed fields with
+scores and exact JSON-pointer or line references. Proposals are never verified
+automatically: the operator must review editable values and explicitly confirm
+the source before an append-only evidence record is created. PDF/image
+extraction stays disabled until a real OCR or document provider is configured.
+
 ## Why this architecture
 
 The project intentionally separates two jobs:
@@ -142,6 +149,7 @@ template so near-duplicate documents cannot leak between development and test.
 - `GET /v1/cases/{dispute_id}`
 - `POST /v1/cases/{dispute_id}/files`
 - `GET /v1/cases/{dispute_id}/files`
+- `POST /v1/cases/{dispute_id}/files/{file_id}/extract`
 - `POST /v1/cases/{dispute_id}/evidence`
 - `POST /v1/cases/{dispute_id}/assessment`
 - `POST /v1/cases/{dispute_id}/drafts`
@@ -202,3 +210,5 @@ See [Milestone 9](docs/MILESTONE_9_LIVE_REVIEW_DEMO.md) for the live review
 migration, guarded synthetic demo, tamper-evident packet, and Supabase audit
 verification. See [Milestone 10](docs/MILESTONE_10_OPERATOR_AUTH.md) for named
 operators, case ownership, atomic webhook-case claiming, and Auth-aware RLS.
+See [Milestone 11](docs/MILESTONE_11_EVIDENCE_EXTRACTION.md) for typed extraction
+proposals, the human-confirmation boundary, and the frozen synthetic benchmark.

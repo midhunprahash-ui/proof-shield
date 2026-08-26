@@ -118,6 +118,30 @@ describe("ProofShieldApi", () => {
     ]);
   });
 
+  test("requests an extraction proposal without claiming it is verified", async () => {
+    let requestedUrl = "";
+    let requestedBody = "";
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedBody = String(init?.body ?? "");
+      return jsonResponse({
+        proposal_id: "extract_test",
+        human_confirmation_required: true,
+        claims: [],
+      });
+    }) as typeof fetch;
+    const api = new ProofShieldApi("http://api.local", fetcher, () => "token");
+
+    const proposal = await api.extractEvidence("dp_1", "file_1", "INVOICE");
+
+    expect(requestedUrl).toBe(
+      "http://api.local/v1/cases/dp_1/files/file_1/extract",
+    );
+    expect(JSON.parse(requestedBody)).toEqual({ evidence_type: "INVOICE" });
+    expect(proposal.human_confirmation_required).toBe(true);
+    expect("source_verified" in proposal).toBe(false);
+  });
+
   test("surfaces FastAPI validation detail as a readable error", async () => {
     const fetcher = (async () =>
       jsonResponse(

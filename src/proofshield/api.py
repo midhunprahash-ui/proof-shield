@@ -45,6 +45,14 @@ from proofshield.drafting import (
     ResponseDraft,
 )
 from proofshield.evidence import EvidenceSubmission
+from proofshield.extraction import (
+    DeterministicEvidenceExtractor,
+    EvidenceExtractionError,
+    EvidenceExtractionProposal,
+    EvidenceExtractionRequest,
+    EvidenceExtractor,
+    UnsupportedExtractionSource,
+)
 from proofshield.file_store import (
     MAX_EVIDENCE_FILE_BYTES,
     EvidenceFileError,
@@ -108,6 +116,7 @@ def create_app(
     case_repository: CaseRepository | None = None,
     evidence_file_store: EvidenceFileStore | None = None,
     webhook_ledger: EventLedger | None = None,
+    evidence_extractor: EvidenceExtractor | None = None,
 ) -> FastAPI:
     application = FastAPI(
         title="ProofShield API",
@@ -136,6 +145,7 @@ def create_app(
     assessor = CaseAssessor()
     draft_generator = EvidenceGroundedDraftGenerator()
     configured_secret = webhook_secret or os.getenv("RAZORPAY_WEBHOOK_SECRET")
+    configured_extractor = evidence_extractor or DeterministicEvidenceExtractor()
 
     supplied_components = (case_repository, evidence_file_store, webhook_ledger)
     if any(component is not None for component in supplied_components) and not all(
@@ -443,6 +453,48 @@ def create_app(
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.post(
+        "/v1/cases/{dispute_id}/files/{file_id}/extract",
+        response_model=EvidenceExtractionProposal,
+    )
+    def extract_case_file(
+        dispute_id: str,
+        file_id: str,
+        request: EvidenceExtractionRequest,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> EvidenceExtractionProposal:
+        try:
+            require_owned_case(dispute_id, operator)
+            record = cases().get_evidence_file_record(dispute_id, file_id)
+            content = files().read(record.storage_key)
+            return configured_extractor.extract(
+                content,
+                content_type=record.metadata.content_type,
+                evidence_type=request.evidence_type,
+                source_file_id=file_id,
+                source_sha256=record.metadata.sha256,
+            )
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except UnsupportedExtractionSource as error:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=str(error),
+            ) from error
+        except EvidenceExtractionError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        except EvidenceFileUnavailable as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(error),
             ) from error
 

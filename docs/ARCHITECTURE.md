@@ -103,7 +103,13 @@ Upload evidence source to private Supabase Storage
   - case-isolated server key includes the SHA-256 hash
        |
        v
-Human reviews the source and enters structured facts
+Provider-independent extraction proposal
+  - JSON pointer or text line reference per field
+  - score is not a calibrated probability
+  - cannot mark evidence as verified
+       |
+       v
+Human reviews, edits and explicitly confirms structured facts
        |
        v
 Evidence ID + source file linked to exactly one dispute
@@ -124,7 +130,9 @@ Verified webhook event
 Payment, order and merchant-evidence adapters
        |
        v
-AI document extraction
+Document extraction provider
+  - deterministic labelled-field baseline now
+  - OCR or document model later for PDF/images
        |
        v
 Deterministic verifier
@@ -141,8 +149,9 @@ Outcome evaluation
 
 ## Safety boundary
 
-The future AI component may propose extracted facts, but it cannot mark its own
-claims as verified. Source verification comes from trusted integration adapters.
+Any extraction component may propose facts, but it cannot mark its own claims as
+verified. Source verification comes from an explicit human confirmation or a
+future trusted integration adapter.
 The deterministic verifier remains the final gate before a response can be
 drafted. Final submission always requires a human.
 
