@@ -38,6 +38,10 @@ from proofshield.case_store import (
     ReviewNotFoundError,
     new_file_id,
 )
+from proofshield.consistency import (
+    EvidenceConsistencyAnalyzer,
+    EvidenceConsistencyReport,
+)
 from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
 from proofshield.drafting import (
     DraftGenerationError,
@@ -144,6 +148,7 @@ def create_app(
         max_age=600,
     )
     assessor = CaseAssessor()
+    consistency_analyzer = EvidenceConsistencyAnalyzer()
     draft_generator = EvidenceGroundedDraftGenerator()
     configured_secret = webhook_secret or os.getenv("RAZORPAY_WEBHOOK_SECRET")
     configured_extractor = evidence_extractor or build_configured_evidence_extractor()
@@ -368,6 +373,23 @@ def create_app(
         try:
             require_owned_case(dispute_id, operator)
             return cases().get_case(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.get(
+        "/v1/cases/{dispute_id}/consistency",
+        response_model=EvidenceConsistencyReport,
+    )
+    def get_evidence_consistency(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> EvidenceConsistencyReport:
+        try:
+            require_owned_case(dispute_id, operator)
+            return consistency_analyzer.analyze(cases().get_case(dispute_id))
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

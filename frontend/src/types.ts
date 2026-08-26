@@ -150,8 +150,69 @@ export interface CaseHistoryEntry {
   detail: string;
 }
 
+export type ConsistencyStatus =
+  | "CONSISTENT"
+  | "CONFLICTS_FOUND"
+  | "INCOMPLETE"
+  | "UNVERIFIED_SOURCES";
+
+export type RequirementOutcome =
+  | "SATISFIED"
+  | "MISSING"
+  | "UNVERIFIED"
+  | "OPTIONAL";
+
+export type FactOutcome = "MATCH" | "CONFLICT" | "MISSING" | "UNVERIFIED";
+
+export interface EvidenceRequirement {
+  evidence_type: EvidenceType;
+  required: boolean;
+  outcome: RequirementOutcome;
+  record_count: number;
+  verified_count: number;
+  unverified_evidence_ids: string[];
+  message: string;
+}
+
+export interface FactObservation {
+  evidence_id: string;
+  evidence_type: EvidenceType;
+  source_name: string | null;
+  source_verified: boolean;
+  value: string | boolean;
+  matches_expected: boolean | null;
+}
+
+export interface FactComparison {
+  field:
+    | "order_id"
+    | "payment_id"
+    | "amount"
+    | "delivery_status"
+    | "customer_acknowledged_delivery";
+  expected_value: string | boolean | null;
+  outcome: FactOutcome;
+  observations: FactObservation[];
+  missing_from_evidence_ids: string[];
+  message: string;
+}
+
+export interface EvidenceConsistencyReport {
+  dispute_id: string;
+  status: ConsistencyStatus;
+  summary: string;
+  requirements: EvidenceRequirement[];
+  facts: FactComparison[];
+  conflict_count: number;
+  missing_count: number;
+  unverified_count: number;
+  advisory_only: true;
+  human_review_required: true;
+}
+
 export interface CaseWorkspaceData {
   case: DisputeCase;
+  consistency: EvidenceConsistencyReport;
   files: EvidenceFileMetadata[];
   drafts: ResponseDraft[];
   history: CaseHistoryEntry[];

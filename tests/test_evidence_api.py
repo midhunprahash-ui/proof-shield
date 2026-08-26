@@ -370,3 +370,33 @@ def test_unavailable_local_ocr_returns_service_unavailable(tmp_path) -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"] == "local OCR runtime is unavailable"
+
+
+def test_operator_can_read_advisory_consistency_report_for_owned_case(tmp_path) -> None:
+    client = make_client(tmp_path)
+    case = create_case(client, index=13)
+
+    response = client.get(f'/v1/cases/{case["dispute_id"]}/consistency')
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "INCOMPLETE"
+    assert body["advisory_only"] is True
+    assert body["human_review_required"] is True
+    assert {item["evidence_type"] for item in body["requirements"]} == {
+        "INVOICE",
+        "DELIVERY_PROOF",
+        "CUSTOMER_COMMUNICATION",
+    }
+
+
+def test_consistency_report_requires_operator_authentication(tmp_path) -> None:
+    client = make_client(tmp_path)
+    case = create_case(client, index=14)
+
+    response = client.get(
+        f'/v1/cases/{case["dispute_id"]}/consistency',
+        headers={"Authorization": "Bearer invalid"},
+    )
+
+    assert response.status_code == 401

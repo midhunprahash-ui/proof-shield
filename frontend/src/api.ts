@@ -5,6 +5,7 @@ import type {
   CaseWorkspaceData,
   DisputeCase,
   DraftReview,
+  EvidenceConsistencyReport,
   EvidenceDocument,
   EvidenceExtractionProposal,
   EvidenceFileMetadata,
@@ -75,13 +76,14 @@ export class ProofShieldApi {
   ): Promise<CaseWorkspaceData> {
     const path = `/v1/cases/${encodeURIComponent(disputeId)}`;
     const requestOptions = signal ? { signal } : {};
-    const [caseData, files, drafts, history] = await Promise.all([
+    const [caseData, consistency, files, drafts, history] = await Promise.all([
       this.request<DisputeCase>(path, requestOptions),
+      this.request<EvidenceConsistencyReport>(`${path}/consistency`, requestOptions),
       this.request<EvidenceFileMetadata[]>(`${path}/files`, requestOptions),
       this.request<ResponseDraft[]>(`${path}/drafts`, requestOptions),
       this.request<CaseHistoryEntry[]>(`${path}/history`, requestOptions),
     ]);
-    return { case: caseData, files, drafts, history };
+    return { case: caseData, consistency, files, drafts, history };
   }
 
   assess(disputeId: string): Promise<Assessment> {

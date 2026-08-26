@@ -10,11 +10,14 @@ function jsonResponse(value: unknown, status = 200): Response {
 }
 
 describe("ProofShieldApi", () => {
-  test("loads the four case workspace resources in parallel", async () => {
+  test("loads the five case workspace resources in parallel", async () => {
     const requested: string[] = [];
     const fetcher = (async (input: RequestInfo | URL) => {
       const url = String(input);
       requested.push(url);
+      if (url.endsWith("/consistency")) {
+        return jsonResponse({ dispute_id: "dp_123", status: "INCOMPLETE" });
+      }
       if (url.endsWith("/files")) return jsonResponse([]);
       if (url.endsWith("/drafts")) return jsonResponse([]);
       if (url.endsWith("/history")) return jsonResponse([]);
@@ -25,10 +28,12 @@ describe("ProofShieldApi", () => {
     const workspace = await api.getWorkspace("dp_123");
 
     expect(workspace.case.dispute_id).toBe("dp_123");
-    expect(requested).toHaveLength(4);
+    expect(workspace.consistency.status).toBe("INCOMPLETE");
+    expect(requested).toHaveLength(5);
     expect(new Set(requested)).toEqual(
       new Set([
         "http://api.local/v1/cases/dp_123",
+        "http://api.local/v1/cases/dp_123/consistency",
         "http://api.local/v1/cases/dp_123/files",
         "http://api.local/v1/cases/dp_123/drafts",
         "http://api.local/v1/cases/dp_123/history",

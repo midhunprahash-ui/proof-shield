@@ -138,6 +138,12 @@ Document extraction provider
   - stable provider contract for an optional cloud adapter later
        |
        v
+Advisory cross-source consistency analyzer
+  - compares every confirmed evidence record
+  - names conflicts, missing facts and unverified sources
+  - calculated on demand; never approves or persists a decision
+       |
+       v
 Deterministic verifier
        |
        v
@@ -155,6 +161,9 @@ Outcome evaluation
 Any extraction component may propose facts, but it cannot mark its own claims as
 verified. Source verification comes from an explicit human confirmation or a
 future trusted integration adapter.
+The consistency analyzer reads only structured, confirmed evidence records and
+returns a derived advisory report. It does not change the case, assessment, or
+drafting decision.
 The deterministic verifier remains the final gate before a response can be
 drafted. Final submission always requires a human.
 

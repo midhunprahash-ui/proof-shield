@@ -42,6 +42,11 @@ confirm the source before an append-only evidence record is created. A stable
 provider contract keeps a future cloud OCR adapter behind the same API and human
 review boundary.
 
+After confirmation, ProofShield compares every structured evidence record instead
+of trusting the first invoice or delivery proof. The Evidence tab names missing
+requirements, unverified sources, and conflicting IDs, amounts, statuses, or
+acknowledgements. This report is calculated on demand and remains advisory.
+
 ## Why this architecture
 
 The project intentionally separates two jobs:
@@ -161,6 +166,7 @@ accuracy claim.
 - `GET /v1/cases/unassigned`
 - `POST /v1/cases/{dispute_id}/claim`
 - `GET /v1/cases/{dispute_id}`
+- `GET /v1/cases/{dispute_id}/consistency`
 - `POST /v1/cases/{dispute_id}/files`
 - `GET /v1/cases/{dispute_id}/files`
 - `POST /v1/cases/{dispute_id}/files/{file_id}/extract`
@@ -229,3 +235,6 @@ proposals, the human-confirmation boundary, and the frozen synthetic benchmark.
 See [Milestone 12](docs/MILESTONE_12_LOCAL_OCR.md) for local PP-OCRv6 extraction,
 page-and-box citations, the cloud-ready provider boundary, and the synthetic scan
 benchmark.
+See [Milestone 13](docs/MILESTONE_13_EVIDENCE_CONSISTENCY.md) for deterministic
+cross-source comparisons, named conflicts and missing facts, and the advisory
+operator review boundary.

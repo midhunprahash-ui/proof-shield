@@ -144,3 +144,5 @@ tests, 11 frontend tests, frontend type-checking, and the production bundle.
 Milestone 13 should compare document facts across sources, surface conflicts and
 missing evidence to the operator, and remain advisory. It must not convert model
 or OCR confidence into an automatic chargeback decision.
+
+This is now implemented in `MILESTONE_13_EVIDENCE_CONSISTENCY.md`.
