@@ -34,9 +34,14 @@ from proofshield.case_store import (
     DraftNotFoundError,
     EvidenceConflictError,
     EvidenceFileMetadata,
+    EvidenceResolutionConflictError,
     ReviewConflictError,
     ReviewNotFoundError,
     new_file_id,
+)
+from proofshield.consistency import (
+    EvidenceConsistencyAnalyzer,
+    EvidenceConsistencyReport,
 )
 from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
 from proofshield.drafting import (
@@ -46,12 +51,12 @@ from proofshield.drafting import (
 )
 from proofshield.evidence import EvidenceSubmission
 from proofshield.extraction import (
-    DeterministicEvidenceExtractor,
     EvidenceExtractionError,
     EvidenceExtractionProposal,
     EvidenceExtractionRequest,
     EvidenceExtractor,
     UnsupportedExtractionSource,
+    build_configured_evidence_extractor,
 )
 from proofshield.file_store import (
     MAX_EVIDENCE_FILE_BYTES,
@@ -62,6 +67,7 @@ from proofshield.file_store import (
     UnsupportedEvidenceFile,
     safe_original_name,
 )
+from proofshield.ocr import OcrProviderUnavailable
 from proofshield.operator_auth import (
     InvalidOperatorToken,
     OperatorAuthenticationUnavailable,
@@ -71,9 +77,16 @@ from proofshield.operator_auth import (
     PublicAuthConfig,
 )
 from proofshield.packet import EvidencePacketError, build_evidence_packet
+from proofshield.resolution import (
+    EvidenceResolution,
+    EvidenceResolutionError,
+    EvidenceResolutionRequest,
+    create_evidence_resolution,
+)
 from proofshield.reviewing import (
     DraftReview,
     DraftReviewRequest,
+    ReviewDecision,
     create_draft_review,
 )
 from proofshield.supabase_runtime import (
@@ -143,9 +156,10 @@ def create_app(
         max_age=600,
     )
     assessor = CaseAssessor()
+    consistency_analyzer = EvidenceConsistencyAnalyzer()
     draft_generator = EvidenceGroundedDraftGenerator()
     configured_secret = webhook_secret or os.getenv("RAZORPAY_WEBHOOK_SECRET")
-    configured_extractor = evidence_extractor or DeterministicEvidenceExtractor()
+    configured_extractor = evidence_extractor or build_configured_evidence_extractor()
 
     supplied_components = (case_repository, evidence_file_store, webhook_ledger)
     if any(component is not None for component in supplied_components) and not all(
@@ -373,6 +387,26 @@ def create_app(
                 detail=str(error),
             ) from error
 
+    @application.get(
+        "/v1/cases/{dispute_id}/consistency",
+        response_model=EvidenceConsistencyReport,
+    )
+    def get_evidence_consistency(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> EvidenceConsistencyReport:
+        try:
+            require_owned_case(dispute_id, operator)
+            return consistency_analyzer.analyze(
+                cases().get_case(dispute_id),
+                cases().list_evidence_resolutions(dispute_id),
+            )
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
     @application.post(
         "/v1/cases/{dispute_id}/files",
         response_model=EvidenceFileMetadata,
@@ -487,6 +521,11 @@ def create_app(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail=str(error),
             ) from error
+        except OcrProviderUnavailable as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(error),
+            ) from error
         except EvidenceExtractionError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -541,6 +580,62 @@ def create_app(
             )
         return document
 
+    @application.get(
+        "/v1/cases/{dispute_id}/resolutions",
+        response_model=list[EvidenceResolution],
+    )
+    def list_case_evidence_resolutions(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> list[EvidenceResolution]:
+        try:
+            require_owned_case(dispute_id, operator)
+            return cases().list_evidence_resolutions(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.post(
+        "/v1/cases/{dispute_id}/resolutions",
+        response_model=EvidenceResolution,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def resolve_case_evidence(
+        dispute_id: str,
+        request: EvidenceResolutionRequest,
+        response: Response,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> EvidenceResolution:
+        try:
+            require_owned_case(dispute_id, operator)
+            case = cases().get_case(dispute_id)
+            existing = cases().list_evidence_resolutions(dispute_id)
+            resolution = create_evidence_resolution(
+                case,
+                existing,
+                request,
+                resolved_by=operator.user_id,
+            )
+            created = cases().save_evidence_resolution(resolution)
+            stored = cases().get_evidence_resolution(
+                dispute_id, resolution.evidence_id
+            )
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except (EvidenceResolutionError, EvidenceResolutionConflictError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return stored
+
     @application.post(
         "/v1/cases/{dispute_id}/assessment",
         response_model=Assessment,
@@ -552,7 +647,8 @@ def create_app(
         try:
             require_owned_case(dispute_id, operator)
             case = cases().get_case(dispute_id)
-            assessment = assessor.assess(case)
+            resolutions = cases().list_evidence_resolutions(dispute_id)
+            assessment = assessor.assess(case, resolutions)
             cases().record_assessment(assessment)
             return assessment
         except CaseNotFoundError as error:
@@ -574,8 +670,10 @@ def create_app(
         try:
             require_owned_case(dispute_id, operator)
             case = cases().get_case(dispute_id)
-            assessment = assessor.assess(case)
-            draft = draft_generator.generate(case, assessment)
+            resolutions = cases().list_evidence_resolutions(dispute_id)
+            consistency = consistency_analyzer.analyze(case, resolutions)
+            assessment = assessor.assess(case, resolutions)
+            draft = draft_generator.generate(case, assessment, consistency)
             created = cases().save_draft(draft)
             stored = cases().get_draft(dispute_id, draft.draft_id)
         except CaseNotFoundError as error:
@@ -651,7 +749,18 @@ def create_app(
     ) -> DraftReview:
         try:
             require_owned_case(dispute_id, operator)
-            cases().get_draft(dispute_id, draft_id)
+            draft = cases().get_draft(dispute_id, draft_id)
+            if request.decision == ReviewDecision.APPROVED:
+                case = cases().get_case(dispute_id)
+                resolutions = cases().list_evidence_resolutions(dispute_id)
+                consistency = consistency_analyzer.analyze(case, resolutions)
+                current_assessment = assessor.assess(case, resolutions)
+                draft_generator.require_current(
+                    case,
+                    draft,
+                    current_assessment,
+                    consistency,
+                )
             review = create_draft_review(
                 dispute_id,
                 draft_id,
@@ -672,6 +781,11 @@ def create_app(
                 detail=str(error),
             ) from error
         except ReviewConflictError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        except DraftGenerationError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(error),
@@ -712,13 +826,29 @@ def create_app(
             case = cases().get_case(dispute_id)
             draft = cases().get_draft(dispute_id, draft_id)
             review = cases().get_review(dispute_id, draft_id)
+            resolutions = cases().list_evidence_resolutions(dispute_id)
+            consistency = consistency_analyzer.analyze(case, resolutions)
+            current_assessment = assessor.assess(case, resolutions)
+            draft_generator.require_current(
+                case,
+                draft,
+                current_assessment,
+                consistency,
+            )
             source_files = []
             for citation in draft.citations:
                 record = cases().get_evidence_file_record(
                     dispute_id, citation.source_file_id
                 )
                 source_files.append((record, files().read(record.storage_key)))
-            packet = build_evidence_packet(case, draft, review, source_files)
+            packet = build_evidence_packet(
+                case,
+                draft,
+                review,
+                source_files,
+                consistency,
+                resolutions,
+            )
         except (CaseNotFoundError, DraftNotFoundError) as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -735,6 +865,11 @@ def create_app(
                 detail=str(error),
             ) from error
         except EvidencePacketError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        except DraftGenerationError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(error),

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from proofshield.consistency import ConsistencyStatus, EvidenceConsistencyAnalyzer
 from proofshield.domain import (
     Assessment,
     CheckOutcome,
@@ -15,6 +17,7 @@ from proofshield.domain import (
     EvidenceType,
     VerificationCheck,
 )
+from proofshield.resolution import EvidenceResolution
 
 MISSING_EVIDENCE_CODES = {
     "MISSING_INVOICE",
@@ -42,19 +45,45 @@ def _money_matches(left: Decimal, right: Decimal) -> bool:
 class CaseAssessor:
     """Assess whether evidence is safe to use in a drafted dispute response."""
 
+    def __init__(
+        self,
+        consistency_analyzer: EvidenceConsistencyAnalyzer | None = None,
+    ) -> None:
+        self.consistency_analyzer = (
+            consistency_analyzer or EvidenceConsistencyAnalyzer()
+        )
+
     def assess(
-        self, case: DisputeCase, *, evaluated_at: datetime | None = None
+        self,
+        case: DisputeCase,
+        resolutions: Iterable[EvidenceResolution] = (),
+        *,
+        evaluated_at: datetime | None = None,
     ) -> Assessment:
         evaluated_at = evaluated_at or datetime.now(UTC)
         if evaluated_at.tzinfo is None:
             raise ValueError("evaluated_at must include a timezone")
 
+        resolution_list = list(resolutions)
+        excluded_ids = {item.evidence_id for item in resolution_list}
+        active_case = case.model_copy(
+            update={
+                "evidence": [
+                    document
+                    for document in case.evidence
+                    if document.evidence_id not in excluded_ids
+                ]
+            },
+            deep=True,
+        )
+
         checks: list[VerificationCheck] = []
         checks.extend(self._check_scope_and_deadline(case, evaluated_at))
         checks.extend(self._check_payment(case))
-        checks.extend(self._check_invoice(case))
-        checks.extend(self._check_delivery(case))
-        checks.extend(self._check_optional_customer_acknowledgement(case))
+        checks.extend(self._check_invoice(active_case))
+        checks.extend(self._check_delivery(active_case))
+        checks.extend(self._check_optional_customer_acknowledgement(active_case))
+        checks.append(self._check_cross_source_consistency(case, resolution_list))
 
         decision = self._decide(checks)
         passed = sum(check.outcome == CheckOutcome.PASS for check in checks)
@@ -82,6 +111,45 @@ class CaseAssessor:
             summary=summaries[decision],
             checks=checks,
             evaluated_at=evaluated_at,
+        )
+
+    def _check_cross_source_consistency(
+        self,
+        case: DisputeCase,
+        resolutions: Iterable[EvidenceResolution] = (),
+    ) -> VerificationCheck:
+        report = self.consistency_analyzer.analyze(case, resolutions)
+        if report.status == ConsistencyStatus.CONSISTENT:
+            return _check(
+                "CROSS_SOURCE_CONSISTENT",
+                CheckOutcome.PASS,
+                "Every confirmed evidence record agrees on the checked facts.",
+            )
+        if report.status == ConsistencyStatus.CONFLICTS_FOUND:
+            return _check(
+                "CROSS_SOURCE_CONFLICT",
+                CheckOutcome.FAIL,
+                (
+                    f"{report.conflict_count} cross-source fact conflicts require "
+                    "operator review before drafting."
+                ),
+            )
+        if report.status == ConsistencyStatus.UNVERIFIED_SOURCES:
+            return _check(
+                "CROSS_SOURCE_UNVERIFIED",
+                CheckOutcome.FAIL,
+                (
+                    f"{report.unverified_count} evidence sources are unverified; "
+                    "all recorded sources must be reviewed before drafting."
+                ),
+            )
+        return _check(
+            "CROSS_SOURCE_INCOMPLETE",
+            CheckOutcome.FAIL,
+            (
+                f"{report.missing_count} required source or fact checks are missing "
+                "from the complete evidence set."
+            ),
         )
 
     @staticmethod

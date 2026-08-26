@@ -4,19 +4,13 @@
 
 ProofShield uses Supabase project `qoujhmqkjicvcwoiyqkp`.
 
-The Codex connection is named `supabase-proofshield` because this computer
+The MCP connection is named `supabase-proofshield` because this computer
 already had a `supabase` MCP connection for a different project. Keeping both
 names prevents an accidental schema change in the unrelated project.
 
-The configured command is:
-
-```bash
-codex mcp add supabase-proofshield --url 'https://mcp.supabase.com/mcp?project_ref=qoujhmqkjicvcwoiyqkp&features=docs%2Caccount%2Cdatabase%2Cdebugging%2Cdevelopment%2Cfunctions%2Cbranching'
-codex mcp login supabase-proofshield
-```
-
-Run `/mcp` in a new Codex task and confirm `supabase-proofshield` is enabled.
-MCP servers added during an existing task load on the next task/session.
+In the development client's MCP settings, confirm `supabase-proofshield` is
+authenticated and its URL contains the exact project reference above. MCP
+servers added during an existing task may load only in the next task/session.
 
 ## Applied repository migrations
 
@@ -28,14 +22,15 @@ supabase/migrations/20260823170424_response_drafts.sql
 supabase/migrations/20260824070552_draft_reviews_and_evidence_packets.sql
 supabase/migrations/20260825080000_draft_reviews_foreign_key_index.sql
 supabase/migrations/20260826080225_operator_auth_and_ownership.sql
+supabase/migrations/20260826104022_evidence_resolution.sql
+supabase/migrations/20260826110406_evidence_resolution_fk_indexes.sql
 ```
 
 The first two were applied on 2026-08-23. The review and index migrations were
-applied on 2026-08-25. Supabase records the four remote migration versions as
-`20260823160507`, `20260823170424`, `20260825073901`, and `20260825074158`.
-The operator-auth migration is repository-ready but is not yet recorded in the
-remote migration history; applying it requires explicit approval for a live
-schema change.
+applied on 2026-08-25. The operator-authentication, evidence-resolution, and
+foreign-key-index migrations were applied on 2026-08-26 after explicit approval.
+Their remote versions are `20260826110215`, `20260826110253`, and
+`20260826110442` respectively.
 Before any future schema change, use the `supabase-proofshield` MCP
 `get_project_url` tool and confirm the result is exactly:
 
@@ -47,8 +42,9 @@ Do not run ProofShield migrations through the older `supabase` connection.
 
 The migrations create:
 
-- eight RLS-enabled `proofshield_*` tables for cases, evidence, response drafts,
-  immutable human reviews, history, webhook state, and append-only audit entries;
+- ten RLS-enabled `proofshield_*` tables for operators, cases, evidence,
+  evidence resolutions, response drafts, immutable human reviews, history,
+  webhook state, and append-only audit entries;
 - transaction-safe Postgres RPCs for case, draft, and webhook idempotency;
 - indexes for every foreign key and primary read path;
 - a private `proofshield-evidence` Storage bucket with a 5 MB limit and MIME
@@ -60,11 +56,15 @@ The activation verification confirmed:
 
 1. every `proofshield_*` table has RLS enabled;
 2. the Storage bucket is private and enforces the 5 MB/MIME restrictions;
-3. anonymous and authenticated roles cannot access tables or RPCs;
+3. anonymous roles cannot read ProofShield tables and authenticated roles have
+   only owner-scoped reads; browser mutation RPCs remain revoked;
 4. service-role case, evidence, draft, history, and webhook transactions work;
 5. replay and conflict results are deterministic;
-6. the composite human-review foreign key has a covering index;
-7. the live Milestone 9 demo retained one intentionally labelled synthetic case,
+6. the composite human-review and evidence-resolution foreign keys have covering
+   indexes;
+7. the no-write evidence-resolution probe returned `CASE_NOT_FOUND` without
+   changing resolution or history counts;
+8. the live Milestone 9 demo retained one intentionally labelled synthetic case,
    `demo_disp_m9_20260825`, for local dashboard demonstrations.
 
 The advisor's `RLS Enabled No Policy` notices are intentional at this stage:

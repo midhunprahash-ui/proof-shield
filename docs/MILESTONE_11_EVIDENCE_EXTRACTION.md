@@ -90,3 +90,7 @@ Add one configurable OCR/document provider for PDF and image sources, run it on
 a separate synthetic scan set, compare it against this baseline, and persist
 proposal/review outcomes only after the data model is reviewed. A provider's
 score must never become a verification decision by itself.
+
+The local-provider portion is now implemented in
+`MILESTONE_12_LOCAL_OCR.md`. Proposal persistence remains intentionally deferred
+until its audit and retention model is designed.

@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from proofshield.domain import Decision, DisputeReason
+from proofshield.domain import Decision, DisputeReason, EvidenceDocument, EvidenceType
 from proofshield.synthetic import SCENARIOS, generate_cases, make_case
 from proofshield.verifier import CaseAssessor
 
@@ -55,3 +55,48 @@ def test_generated_development_cases_match_their_documented_scenarios() -> None:
             evaluated_at=labelled_case.case.created_at + timedelta(hours=2),
         )
         assert assessment.decision == labelled_case.expected_decision
+
+
+def test_later_conflicting_invoice_blocks_a_previously_safe_first_invoice() -> None:
+    case = make_case(5, "valid_delivery")
+    case.evidence.append(
+        EvidenceDocument(
+            evidence_id="invoice_later_conflict",
+            evidence_type=EvidenceType.INVOICE,
+            source_verified=True,
+            order_id="order_from_another_purchase",
+            payment_id=case.payment_id,
+            amount=case.disputed_amount,
+        )
+    )
+
+    assessment = CaseAssessor().assess(case, evaluated_at=EVALUATED_AT)
+
+    assert assessment.decision == Decision.NEEDS_REVIEW
+    conflict = next(
+        check
+        for check in assessment.checks
+        if check.code == "CROSS_SOURCE_CONFLICT"
+    )
+    assert conflict.outcome == "FAIL"
+
+
+def test_later_unverified_source_blocks_drafting_even_when_values_match() -> None:
+    case = make_case(6, "valid_delivery")
+    case.evidence.append(
+        EvidenceDocument(
+            evidence_id="invoice_later_unverified",
+            evidence_type=EvidenceType.INVOICE,
+            source_verified=False,
+            order_id=case.order_id,
+            payment_id=case.payment_id,
+            amount=case.disputed_amount,
+        )
+    )
+
+    assessment = CaseAssessor().assess(case, evaluated_at=EVALUATED_AT)
+
+    assert assessment.decision == Decision.NEEDS_REVIEW
+    assert "CROSS_SOURCE_UNVERIFIED" in {
+        check.code for check in assessment.checks
+    }

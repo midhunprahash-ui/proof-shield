@@ -18,6 +18,7 @@ from proofshield.case_store import (
     EvidenceConflictError,
     EvidenceFileMetadata,
     EvidenceFileRecord,
+    EvidenceResolutionConflictError,
     ReviewConflictError,
     ReviewNotFoundError,
     model_sha256,
@@ -29,6 +30,7 @@ from proofshield.file_store import (
     StoredFileBlob,
     normalize_and_validate_file,
 )
+from proofshield.resolution import EvidenceResolution
 from proofshield.reviewing import DraftReview, ReviewDecision
 
 
@@ -38,6 +40,7 @@ class InMemoryCaseRepository:
         self._cases: dict[str, tuple[DisputeCase, str, datetime]] = {}
         self._owners: dict[str, str | None] = {}
         self._evidence: dict[str, tuple[str, EvidenceDocument, str, datetime]] = {}
+        self._resolutions: dict[str, EvidenceResolution] = {}
         self._files: dict[str, tuple[EvidenceFileMetadata, str]] = {}
         self._drafts: dict[str, ResponseDraft] = {}
         self._reviews: dict[str, DraftReview] = {}
@@ -259,7 +262,59 @@ class InMemoryCaseRepository:
                 ),
                 now,
             )
+        return True
+
+    def save_evidence_resolution(self, resolution: EvidenceResolution) -> bool:
+        with self._lock:
+            self._require_case(resolution.dispute_id)
+            existing = self._resolutions.get(resolution.evidence_id)
+            if existing is not None:
+                if existing.request_sha256 == resolution.request_sha256:
+                    return False
+                raise EvidenceResolutionConflictError(
+                    f"evidence {resolution.evidence_id} already has a resolution"
+                )
+            now = resolution.created_at
+            self._resolutions[resolution.evidence_id] = resolution.model_copy(deep=True)
+            case, digest, _updated = self._cases[resolution.dispute_id]
+            self._cases[resolution.dispute_id] = (case, digest, now)
+            self._append_history(
+                resolution.dispute_id,
+                CaseHistoryAction.EVIDENCE_RESOLVED,
+                resolution.resolution_id,
+                (
+                    f"Evidence {resolution.evidence_id}; action={resolution.action}; "
+                    f"replacement={resolution.replacement_evidence_id or 'none'}."
+                ),
+                now,
+            )
             return True
+
+    def get_evidence_resolution(
+        self, dispute_id: str, evidence_id: str
+    ) -> EvidenceResolution:
+        with self._lock:
+            self._require_case(dispute_id)
+            resolution = self._resolutions.get(evidence_id)
+            if resolution is None or resolution.dispute_id != dispute_id:
+                raise CaseNotFoundError(
+                    f"evidence {evidence_id} has no resolution for case {dispute_id}"
+                )
+            return resolution.model_copy(deep=True)
+
+    def list_evidence_resolutions(
+        self, dispute_id: str
+    ) -> list[EvidenceResolution]:
+        with self._lock:
+            self._require_case(dispute_id)
+            return sorted(
+                (
+                    resolution.model_copy(deep=True)
+                    for resolution in self._resolutions.values()
+                    if resolution.dispute_id == dispute_id
+                ),
+                key=lambda item: (item.created_at, item.resolution_id),
+            )
 
     def record_assessment(self, assessment: Assessment) -> None:
         with self._lock:

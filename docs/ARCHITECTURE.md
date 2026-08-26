@@ -104,7 +104,9 @@ Upload evidence source to private Supabase Storage
        |
        v
 Provider-independent extraction proposal
-  - JSON pointer or text line reference per field
+  - deterministic labels for JSON and UTF-8 text
+  - local PP-OCRv6 for PDF, PNG and JPEG
+  - JSON pointer, text line, or OCR page-and-box reference per field
   - score is not a calibrated probability
   - cannot mark evidence as verified
        |
@@ -113,6 +115,13 @@ Human reviews, edits and explicitly confirms structured facts
        |
        v
 Evidence ID + source file linked to exactly one dispute
+       |
+       v
+Append-only evidence resolution when needed
+  - original record and file remain visible
+  - incorrect records are excluded from future checks
+  - superseded records require a same-type replacement
+  - verified operator identity and reason are retained
        |
        v
 Deterministic reassessment
@@ -131,8 +140,15 @@ Payment, order and merchant-evidence adapters
        |
        v
 Document extraction provider
-  - deterministic labelled-field baseline now
-  - OCR or document model later for PDF/images
+  - deterministic labelled fields for JSON/text
+  - local PP-OCRv6 for PDF/images
+  - stable provider contract for an optional cloud adapter later
+       |
+       v
+Advisory cross-source consistency analyzer
+  - compares every confirmed evidence record
+  - names conflicts, missing facts and unverified sources
+  - calculated on demand; never approves or persists a chargeback decision
        |
        v
 Deterministic verifier
@@ -152,6 +168,11 @@ Outcome evaluation
 Any extraction component may propose facts, but it cannot mark its own claims as
 verified. Source verification comes from an explicit human confirmation or a
 future trusted integration adapter.
+The consistency analyzer reads only structured, confirmed evidence records and
+returns a derived report. The report never decides a chargeback, but the
+deterministic verifier maps conflicts, missing required facts, and unverified
+sources to failed draft-readiness checks. A later conflicting record therefore
+cannot be hidden behind the first invoice or delivery proof.
 The deterministic verifier remains the final gate before a response can be
 drafted. Final submission always requires a human.
 
@@ -161,6 +182,12 @@ Supabase is currently the only cloud system. It provides Postgres, transaction-s
 webhook idempotency, append-only audit/history tables, and a private evidence
 bucket. The API and frontend are not deployed. This keeps today’s architecture
 simple while allowing either component to be hosted elsewhere later.
+
+OCR runs inside the local FastAPI process after a backend-only read from private
+Storage and a fresh SHA-256 check. The current PaddleOCR provider is replaceable;
+a future cloud provider must remain backend-only and return the same located,
+unverified observations. Changing providers cannot weaken case ownership,
+provenance checks, or human confirmation.
 
 All public-schema ProofShield tables use RLS. The operator-auth migration adds
 read-only policies that require an active registry row and case ownership.
@@ -178,6 +205,12 @@ deterministic ZIP whose cited Storage objects are re-hashed before inclusion.
 The caller cannot supply the reviewer label; the backend stamps the verified
 Auth user ID and registry-controlled display name.
 
+Packet export re-runs consistency and assessment against the current active
+evidence set. Any evidence addition or resolution after drafting changes the
+deterministic input fingerprint and invalidates the old approval. Version 3
+packets include hashed `consistency-report.json` and
+`evidence-resolutions.json` files whose digests are sealed into the manifest.
+
 ## Current frontend boundary
 
 ```text
@@ -194,7 +227,8 @@ Supabase Postgres + private Storage
 ```
 
 The browser can sign in, claim an unassigned webhook case, list only owned
-cases, upload a reviewed source, add structured evidence,
+cases, upload a reviewed source, add structured evidence, record an immutable
+evidence resolution,
 run the verifier, create a cited draft, record one protected human decision,
 download an approved packet, and view case history. It cannot access Supabase
 tables or Storage directly and it cannot submit a response to Razorpay.

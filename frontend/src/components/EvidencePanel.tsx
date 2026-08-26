@@ -1,27 +1,55 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { ProofShieldApi } from "../api";
 import { evidenceTypeLabel, formatBytes, formatDateTime, shortId } from "../lib/format";
 import type {
   DisputeCase,
+  EvidenceConsistencyReport,
   EvidenceExtractionProposal,
   EvidenceFileMetadata,
+  EvidenceResolution,
   EvidenceSubmission,
   EvidenceType,
 } from "../types";
 import { Icon } from "./Icon";
+import { EvidenceResolutionPanel } from "./EvidenceResolutionPanel";
 import { StatusBadge } from "./StatusBadge";
+
+const CONSISTENCY_STATUS = {
+  CONSISTENT: { label: "Sources agree", tone: "good" as const },
+  CONFLICTS_FOUND: { label: "Conflicts found", tone: "danger" as const },
+  INCOMPLETE: { label: "Evidence incomplete", tone: "warning" as const },
+  UNVERIFIED_SOURCES: { label: "Unverified sources", tone: "warning" as const },
+};
+
+const REQUIREMENT_TONE = {
+  SATISFIED: "good" as const,
+  MISSING: "danger" as const,
+  UNVERIFIED: "warning" as const,
+  OPTIONAL: "muted" as const,
+};
+
+const FACT_TONE = {
+  MATCH: "good" as const,
+  CONFLICT: "danger" as const,
+  MISSING: "warning" as const,
+  UNVERIFIED: "warning" as const,
+};
 
 export function EvidencePanel({
   api,
   caseData,
+  consistency,
   files,
+  resolutions,
   notify,
   onChanged,
 }: {
   api: ProofShieldApi;
   caseData: DisputeCase;
+  consistency: EvidenceConsistencyReport;
   files: EvidenceFileMetadata[];
+  resolutions: EvidenceResolution[];
   notify: (message: string, tone?: "danger" | "good") => void;
   onChanged: () => Promise<void>;
 }) {
@@ -38,6 +66,10 @@ export function EvidencePanel({
   const [deliveryStatus, setDeliveryStatus] = useState("delivered");
   const [customerAcknowledged, setCustomerAcknowledged] = useState(false);
   const [text, setText] = useState("");
+  const resolutionByEvidenceId = useMemo(
+    () => new Map(resolutions.map((resolution) => [resolution.evidence_id, resolution])),
+    [resolutions],
+  );
 
   async function uploadFile(file: File | undefined) {
     if (!file) return;
@@ -135,6 +167,7 @@ export function EvidencePanel({
 
   return (
     <div className="panel-stack">
+      <ConsistencyReport report={consistency} />
       <section className="workspace-grid evidence-summary-grid">
         <article className="detail-card span-two">
           <div className="card-heading">
@@ -154,14 +187,25 @@ export function EvidencePanel({
           ) : (
             <div className="evidence-record-list">
               {caseData.evidence.map((evidence) => (
-                <article className="evidence-record" key={evidence.evidence_id}>
+                <article
+                  className={resolutionByEvidenceId.has(evidence.evidence_id)
+                    ? "evidence-record evidence-record-resolved"
+                    : "evidence-record"}
+                  key={evidence.evidence_id}
+                >
                   <span className="file-kind"><Icon name="file" size={18} /></span>
                   <div>
                     <strong>{evidenceTypeLabel(evidence.evidence_type)}</strong>
                     <span>{evidence.source_name ?? shortId(evidence.evidence_id)}</span>
                   </div>
-                  <StatusBadge tone={evidence.source_verified ? "good" : "warning"}>
-                    {evidence.source_verified ? "Verified" : "Unverified"}
+                  <StatusBadge
+                    tone={resolutionByEvidenceId.has(evidence.evidence_id)
+                      ? "muted"
+                      : evidence.source_verified ? "good" : "warning"}
+                  >
+                    {resolutionByEvidenceId.has(evidence.evidence_id)
+                      ? "Resolved"
+                      : evidence.source_verified ? "Verified" : "Unverified"}
                   </StatusBadge>
                   <code>{evidence.source_sha256 ? shortId(evidence.source_sha256, 6) : "No hash"}</code>
                 </article>
@@ -192,6 +236,14 @@ export function EvidencePanel({
           </div>
         </article>
       </section>
+
+      <EvidenceResolutionPanel
+        api={api}
+        caseData={caseData}
+        notify={notify}
+        onChanged={onChanged}
+        resolutions={resolutions}
+      />
 
       <section className="workspace-grid composer-grid">
         <article className="detail-card">
@@ -228,8 +280,9 @@ export function EvidencePanel({
             <StatusBadge tone="warning">Never auto-verified</StatusBadge>
           </div>
           <p className="muted-copy">
-            The local baseline reads exact labels from JSON or text. Every value
-            keeps a source reference and must be reviewed before submission.
+            JSON and text use exact-label parsing. PDF and image sources use the
+            configured local OCR provider. Every value keeps a source reference
+            and must be reviewed before submission.
           </p>
           <div className="form-grid extraction-selectors">
             <label>
@@ -276,6 +329,9 @@ export function EvidencePanel({
           </button>
           {proposal ? (
             <div className="extraction-proposal">
+              <p className="muted-copy">
+                Extractor: <code>{proposal.extractor}</code>
+              </p>
               {proposal.claims.map((claim) => (
                 <div key={claim.field}>
                   <span>{claim.field.replaceAll("_", " ")}</span>
@@ -407,5 +463,77 @@ export function EvidencePanel({
         </article>
       </section>
     </div>
+  );
+}
+
+function ConsistencyReport({ report }: { report: EvidenceConsistencyReport }) {
+  const status = CONSISTENCY_STATUS[report.status];
+
+  return (
+    <section className="detail-card consistency-card">
+      <div className="card-heading">
+        <div>
+          <p className="eyebrow">Cross-source consistency</p>
+          <h3>Compare every confirmed record</h3>
+        </div>
+        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+      </div>
+      <p className="muted-copy consistency-summary">
+        {report.summary} This report never decides the chargeback. Deterministic
+        conflicts block drafting until an operator corrects or resolves the evidence.
+      </p>
+      <div className="consistency-metrics" aria-label="Consistency finding counts">
+        <span><strong>{report.conflict_count}</strong> conflicts</span>
+        <span><strong>{report.missing_count}</strong> missing checks</span>
+        <span><strong>{report.unverified_count}</strong> unverified sources</span>
+      </div>
+      <div className="consistency-layout">
+        <div className="requirement-list">
+          <h4>Source coverage</h4>
+          {report.requirements.map((requirement) => (
+            <div key={requirement.evidence_type}>
+              <div>
+                <strong>{evidenceTypeLabel(requirement.evidence_type)}</strong>
+                <small>{requirement.message}</small>
+              </div>
+              <StatusBadge tone={REQUIREMENT_TONE[requirement.outcome]}>
+                {requirement.outcome.toLowerCase()}
+              </StatusBadge>
+            </div>
+          ))}
+        </div>
+        <div className="consistency-fact-list">
+          <h4>Fact comparison</h4>
+          {report.facts.map((fact) => (
+            <article key={fact.field}>
+              <div className="consistency-fact-heading">
+                <strong>{fact.field.replaceAll("_", " ")}</strong>
+                <StatusBadge tone={FACT_TONE[fact.outcome]}>
+                  {fact.outcome.toLowerCase()}
+                </StatusBadge>
+              </div>
+              <p>{fact.message}</p>
+              {fact.expected_value !== null ? (
+                <small>Expected: <code>{String(fact.expected_value)}</code></small>
+              ) : null}
+              <ul>
+                {fact.observations.map((observation) => (
+                  <li key={observation.evidence_id}>
+                    <span>{observation.source_name ?? shortId(observation.evidence_id)}</span>
+                    <code>{String(observation.value)}</code>
+                    {!observation.source_verified ? <em>unverified</em> : null}
+                  </li>
+                ))}
+              </ul>
+              {fact.missing_from_evidence_ids.length > 0 ? (
+                <small>
+                  Missing from: {fact.missing_from_evidence_ids.map((id) => shortId(id)).join(", ")}
+                </small>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }

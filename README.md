@@ -34,12 +34,27 @@ the operator one workspace for the dispute queue, evidence upload and reviewed
 fact entry, deterministic assessment, cited response drafting, final human
 review, packet download, and the append-only audit timeline.
 
-Uploaded JSON and UTF-8 text evidence can also pass through a deterministic,
-provider-independent extraction baseline. It returns proposed fields with
-scores and exact JSON-pointer or line references. Proposals are never verified
-automatically: the operator must review editable values and explicitly confirm
-the source before an append-only evidence record is created. PDF/image
-extraction stays disabled until a real OCR or document provider is configured.
+Uploaded JSON and UTF-8 text evidence passes through deterministic labelled-field
+extraction. PDF, PNG, and JPEG evidence can now use local PP-OCRv6. OCR proposals
+include scores plus exact page and bounding-box references. Proposals are never
+verified automatically: the operator must review editable values and explicitly
+confirm the source before an append-only evidence record is created. A stable
+provider contract keeps a future cloud OCR adapter behind the same API and human
+review boundary.
+
+After confirmation, ProofShield compares every structured evidence record instead
+of trusting the first invoice or delivery proof. The Evidence tab names missing
+requirements, unverified sources, and conflicting IDs, amounts, statuses, or
+acknowledgements. The report never decides the chargeback, but deterministic
+conflicts and unverified sources now block response drafting until they are
+resolved and reassessed.
+
+An authenticated case owner can now resolve an incorrect record without editing
+or deleting it. The operator chooses exclusion or a same-type replacement,
+records a mandatory reason, and confirms the permanent action. Future checks and
+drafts ignore the resolved record, while the original evidence remains visible
+in the case and audit trail. Any earlier draft becomes stale. Approved packet
+version 3 exports include the immutable resolution audit and its manifest hash.
 
 ## Why this architecture
 
@@ -62,7 +77,7 @@ future frontend still run locally until deployment is explicitly chosen.
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e '.[dev,ocr]'
 cp .env.example .env
 # Add the backend-only Supabase secret, browser-safe publishable key, and webhook secret.
 set -a
@@ -134,6 +149,19 @@ The generator creates development fixtures, not final evaluation evidence. The
 held-out evaluation set will be independently reviewed and separated by case
 template so near-duplicate documents cannot leak between development and test.
 
+Generate and run the clean synthetic OCR smoke benchmark with:
+
+```bash
+python scripts/generate_synthetic_ocr_fixtures.py
+python -m proofshield.ocr_evaluation \
+  --input data/synthetic/ocr/ocr_cases.jsonl
+```
+
+The first run downloads PP-OCRv6 weights to the local PaddleX cache. It does not
+upload the benchmark or evidence bytes to an OCR cloud. The three generated
+fixtures validate the local integration only; they are not a production-quality
+accuracy claim.
+
 ## Current API
 
 - `GET /health`
@@ -147,10 +175,13 @@ template so near-duplicate documents cannot leak between development and test.
 - `GET /v1/cases/unassigned`
 - `POST /v1/cases/{dispute_id}/claim`
 - `GET /v1/cases/{dispute_id}`
+- `GET /v1/cases/{dispute_id}/consistency`
 - `POST /v1/cases/{dispute_id}/files`
 - `GET /v1/cases/{dispute_id}/files`
 - `POST /v1/cases/{dispute_id}/files/{file_id}/extract`
 - `POST /v1/cases/{dispute_id}/evidence`
+- `GET /v1/cases/{dispute_id}/resolutions`
+- `POST /v1/cases/{dispute_id}/resolutions`
 - `POST /v1/cases/{dispute_id}/assessment`
 - `POST /v1/cases/{dispute_id}/drafts`
 - `GET /v1/cases/{dispute_id}/drafts`
@@ -212,3 +243,14 @@ verification. See [Milestone 10](docs/MILESTONE_10_OPERATOR_AUTH.md) for named
 operators, case ownership, atomic webhook-case claiming, and Auth-aware RLS.
 See [Milestone 11](docs/MILESTONE_11_EVIDENCE_EXTRACTION.md) for typed extraction
 proposals, the human-confirmation boundary, and the frozen synthetic benchmark.
+See [Milestone 12](docs/MILESTONE_12_LOCAL_OCR.md) for local PP-OCRv6 extraction,
+page-and-box citations, the cloud-ready provider boundary, and the synthetic scan
+benchmark.
+See [Milestone 13](docs/MILESTONE_13_EVIDENCE_CONSISTENCY.md) for deterministic
+cross-source comparisons, named conflicts and missing facts, and the advisory
+operator review boundary.
+See [Milestone 14](docs/MILESTONE_14_CONSISTENCY_GATE.md) for all-source drafting
+gates, stale-approval refusal, and consistency reports inside evidence packets.
+See [Milestone 15](docs/MILESTONE_15_EVIDENCE_RESOLUTION.md) for append-only
+evidence corrections, stale-draft invalidation, packet version 3, and the gated
+Supabase activation order.

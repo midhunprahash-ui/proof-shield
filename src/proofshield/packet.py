@@ -12,11 +12,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from proofshield.case_store import EvidenceFileRecord
+from proofshield.consistency import ConsistencyStatus, EvidenceConsistencyReport
 from proofshield.domain import DisputeCase
 from proofshield.drafting import ResponseDraft
+from proofshield.resolution import EvidenceResolution
 from proofshield.reviewing import DraftReview, ReviewDecision
 
-PACKET_FORMAT = "proofshield-evidence-packet-v1"
+PACKET_FORMAT = "proofshield-evidence-packet-v3"
 
 
 class EvidencePacketError(RuntimeError):
@@ -35,6 +37,8 @@ def build_evidence_packet(
     draft: ResponseDraft,
     review: DraftReview,
     files: Iterable[tuple[EvidenceFileRecord, bytes]],
+    consistency: EvidenceConsistencyReport,
+    resolutions: Iterable[EvidenceResolution] = (),
 ) -> EvidencePacket:
     if draft.dispute_id != case.dispute_id or review.dispute_id != case.dispute_id:
         raise EvidencePacketError("case, draft, and review dispute IDs must match")
@@ -42,6 +46,22 @@ def build_evidence_packet(
         raise EvidencePacketError("review does not belong to this draft")
     if review.decision != ReviewDecision.APPROVED:
         raise EvidencePacketError("only an approved draft can be exported")
+    if consistency.dispute_id != case.dispute_id:
+        raise EvidencePacketError("consistency report belongs to a different case")
+    if consistency.status != ConsistencyStatus.CONSISTENT:
+        raise EvidencePacketError(
+            "current evidence is not cross-source consistent; reassess before export"
+        )
+    resolution_list = sorted(
+        resolutions,
+        key=lambda item: (item.created_at, item.resolution_id),
+    )
+    if any(item.dispute_id != case.dispute_id for item in resolution_list):
+        raise EvidencePacketError("every resolution must belong to the exported case")
+    if {item.evidence_id for item in resolution_list} != set(
+        consistency.excluded_evidence_ids
+    ):
+        raise EvidencePacketError("resolution audit does not match the consistency report")
 
     by_file_id = {record.metadata.file_id: (record, content) for record, content in files}
     evidence_entries: list[dict[str, object]] = []
@@ -87,6 +107,10 @@ def build_evidence_packet(
         )
         evidence_blobs.append((packet_path, content))
 
+    consistency_json = consistency.model_dump(mode="json")
+    consistency_sha256 = _json_sha256(consistency_json)
+    resolutions_json = [item.model_dump(mode="json") for item in resolution_list]
+    resolutions_sha256 = _json_sha256(resolutions_json)
     manifest_core = {
         "format": PACKET_FORMAT,
         "dispute_id": case.dispute_id,
@@ -96,6 +120,10 @@ def build_evidence_packet(
         "review_decision": review.decision,
         "reviewed_at": review.created_at,
         "reviewer_label": review.reviewer_label,
+        "consistency_status": consistency.status,
+        "consistency_report_sha256": consistency_sha256,
+        "resolution_count": len(resolution_list),
+        "evidence_resolutions_sha256": resolutions_sha256,
         "evidence": evidence_entries,
     }
     manifest_sha256 = _json_sha256(manifest_core)
@@ -113,6 +141,12 @@ def build_evidence_packet(
         )
         _write_json(
             archive,
+            "evidence-resolutions.json",
+            resolutions_json,
+            timestamp,
+        )
+        _write_json(
+            archive,
             "draft.json",
             draft.model_dump(mode="json"),
             timestamp,
@@ -121,6 +155,12 @@ def build_evidence_packet(
             archive,
             "review.json",
             review.model_dump(mode="json"),
+            timestamp,
+        )
+        _write_json(
+            archive,
+            "consistency-report.json",
+            consistency_json,
             timestamp,
         )
         _write_bytes(

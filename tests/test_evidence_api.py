@@ -4,16 +4,19 @@ from fastapi.testclient import TestClient
 
 from proofshield.api import create_app
 from proofshield.domain import Decision
+from proofshield.extraction import RoutingEvidenceExtractor
 from proofshield.memory import (
     InMemoryCaseRepository,
     InMemoryEventLedger,
     InMemoryEvidenceFileStore,
 )
+from proofshield.ocr import OcrProviderUnavailable, OcrTextObservation
 from proofshield.synthetic import make_case
 from tests.auth_helpers import AUTH_HEADERS, TEST_AUTHENTICATOR
 
 
-def make_client(tmp_path) -> TestClient:
+def make_client(tmp_path, *, evidence_extractor=None) -> TestClient:
+    del tmp_path
     return TestClient(
         create_app(
             webhook_secret="local-secret",
@@ -21,6 +24,7 @@ def make_client(tmp_path) -> TestClient:
             evidence_file_store=InMemoryEvidenceFileStore(),
             webhook_ledger=InMemoryEventLedger(),
             operator_authenticator=TEST_AUTHENTICATOR,
+            evidence_extractor=evidence_extractor,
         ),
         headers=AUTH_HEADERS,
     )
@@ -273,7 +277,10 @@ def test_operator_extracts_unverified_invoice_proposals_from_owned_json(tmp_path
 
 
 def test_local_extractor_refuses_to_pretend_it_can_read_pdf(tmp_path) -> None:
-    client = make_client(tmp_path)
+    client = make_client(
+        tmp_path,
+        evidence_extractor=RoutingEvidenceExtractor(None),
+    )
     case = create_case(client, index=10)
     uploaded = upload_file(
         client,
@@ -289,4 +296,107 @@ def test_local_extractor_refuses_to_pretend_it_can_read_pdf(tmp_path) -> None:
     )
 
     assert response.status_code == 415
-    assert "configured provider" in response.json()["detail"]
+    assert "disabled" in response.json()["detail"]
+
+
+class ApiOcrProvider:
+    name = "test-local-ocr"
+
+    def read(self, content: bytes, *, content_type: str) -> list[OcrTextObservation]:
+        del content, content_type
+        return [
+            OcrTextObservation(
+                page=1,
+                text="Invoice amount: INR 750.00",
+                confidence=0.96,
+                bounding_box=(10, 10, 250, 40),
+            )
+        ]
+
+
+class UnavailableApiOcrProvider:
+    name = "unavailable-local-ocr"
+
+    def read(self, content: bytes, *, content_type: str) -> list[OcrTextObservation]:
+        del content, content_type
+        raise OcrProviderUnavailable("local OCR runtime is unavailable")
+
+
+def test_owned_image_uses_configured_ocr_without_verifying_the_proposal(tmp_path) -> None:
+    client = make_client(
+        tmp_path,
+        evidence_extractor=RoutingEvidenceExtractor(ApiOcrProvider()),
+    )
+    case = create_case(client, index=11)
+    uploaded = upload_file(
+        client,
+        case,
+        name="invoice.png",
+        content=b"\x89PNG\r\n\x1a\nsynthetic invoice",
+        content_type="image/png",
+    )
+
+    response = client.post(
+        f'/v1/cases/{case["dispute_id"]}/files/{uploaded["file_id"]}/extract',
+        json={"evidence_type": "INVOICE"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["extractor"] == "test-local-ocr+labelled-fields-v1"
+    assert body["human_confirmation_required"] is True
+    assert body["claims"][0]["source_reference"] == "page 1, box [10,10,250,40]"
+    assert "source_verified" not in body
+
+
+def test_unavailable_local_ocr_returns_service_unavailable(tmp_path) -> None:
+    client = make_client(
+        tmp_path,
+        evidence_extractor=RoutingEvidenceExtractor(UnavailableApiOcrProvider()),
+    )
+    case = create_case(client, index=12)
+    uploaded = upload_file(
+        client,
+        case,
+        name="delivery.jpg",
+        content=b"\xff\xd8\xffsynthetic delivery",
+        content_type="image/jpeg",
+    )
+
+    response = client.post(
+        f'/v1/cases/{case["dispute_id"]}/files/{uploaded["file_id"]}/extract',
+        json={"evidence_type": "DELIVERY_PROOF"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "local OCR runtime is unavailable"
+
+
+def test_operator_can_read_advisory_consistency_report_for_owned_case(tmp_path) -> None:
+    client = make_client(tmp_path)
+    case = create_case(client, index=13)
+
+    response = client.get(f'/v1/cases/{case["dispute_id"]}/consistency')
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "INCOMPLETE"
+    assert body["advisory_only"] is True
+    assert body["human_review_required"] is True
+    assert {item["evidence_type"] for item in body["requirements"]} == {
+        "INVOICE",
+        "DELIVERY_PROOF",
+        "CUSTOMER_COMMUNICATION",
+    }
+
+
+def test_consistency_report_requires_operator_authentication(tmp_path) -> None:
+    client = make_client(tmp_path)
+    case = create_case(client, index=14)
+
+    response = client.get(
+        f'/v1/cases/{case["dispute_id"]}/consistency',
+        headers={"Authorization": "Bearer invalid"},
+    )
+
+    assert response.status_code == 401

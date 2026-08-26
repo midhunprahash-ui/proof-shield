@@ -160,6 +160,8 @@ def test_approved_review_is_idempotent_and_exports_verified_zip() -> None:
         assert {
             "manifest.json",
             "case.json",
+            "evidence-resolutions.json",
+            "consistency-report.json",
             "draft.json",
             "review.json",
             "response.txt",
@@ -167,7 +169,18 @@ def test_approved_review_is_idempotent_and_exports_verified_zip() -> None:
             "evidence/E2_delivery.json",
         } <= names
         manifest = json.loads(archive.read("manifest.json"))
+        consistency_bytes = archive.read("consistency-report.json")
+        consistency = json.loads(consistency_bytes)
+        assert manifest["format"] == "proofshield-evidence-packet-v3"
+        assert manifest["resolution_count"] == 0
+        assert json.loads(archive.read("evidence-resolutions.json")) == []
         assert manifest["review_decision"] == "APPROVED"
+        assert manifest["consistency_status"] == "CONSISTENT"
+        assert consistency["status"] == "CONSISTENT"
+        assert consistency["advisory_only"] is True
+        assert manifest["consistency_report_sha256"] == hashlib.sha256(
+            consistency_bytes
+        ).hexdigest()
         assert manifest["draft_content_sha256"] == draft["content_sha256"]
         assert packet.headers["x-proofshield-manifest-sha256"] == manifest[
             "manifest_sha256"
@@ -176,6 +189,65 @@ def test_approved_review_is_idempotent_and_exports_verified_zip() -> None:
             assert hashlib.sha256(archive.read(entry["packet_path"])).hexdigest() == entry[
                 "sha256"
             ]
+
+
+def test_resolution_stales_old_draft_and_is_audited_in_new_packet() -> None:
+    client, _files = make_client()
+    case, old_draft = create_draft(client, 212)
+    dispute_id = case["dispute_id"]
+    stored_case = client.get(f"/v1/cases/{dispute_id}").json()
+    original_invoice = next(
+        item for item in stored_case["evidence"] if item["evidence_type"] == "INVOICE"
+    )
+    replacement_id = "invoice_operator_replacement"
+    replacement = client.post(
+        f"/v1/cases/{dispute_id}/evidence",
+        json={
+            "evidence_id": replacement_id,
+            "evidence_type": "INVOICE",
+            "source_file_id": original_invoice["source_file_id"],
+            "human_confirmed_source": True,
+            "order_id": case["order_id"],
+            "payment_id": case["payment_id"],
+            "amount": case["disputed_amount"],
+        },
+    )
+    resolution = client.post(
+        f"/v1/cases/{dispute_id}/resolutions",
+        json={
+            "evidence_id": original_invoice["evidence_id"],
+            "action": "SUPERSEDED",
+            "replacement_evidence_id": replacement_id,
+            "reason": "Operator rechecked the source and selected the corrected record.",
+        },
+    )
+
+    stale_review = client.post(
+        review_url(case, old_draft),
+        json={"decision": "APPROVED"},
+    )
+    new_draft = client.post(f"/v1/cases/{dispute_id}/drafts")
+    approved = client.post(
+        review_url(case, new_draft.json()),
+        json={"decision": "APPROVED", "note": "Replacement invoice verified."},
+    )
+    packet = client.get(packet_url(case, new_draft.json()))
+
+    assert replacement.status_code == 201
+    assert resolution.status_code == 201
+    assert stale_review.status_code == 409
+    assert new_draft.status_code == 201
+    assert {
+        citation["evidence_id"] for citation in new_draft.json()["citations"]
+    } == {replacement_id, f"delivery_{dispute_id}"}
+    assert approved.status_code == 201
+    assert packet.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(packet.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        resolutions = json.loads(archive.read("evidence-resolutions.json"))
+    assert manifest["resolution_count"] == 1
+    assert resolutions[0]["evidence_id"] == original_invoice["evidence_id"]
+    assert resolutions[0]["replacement_evidence_id"] == replacement_id
 
     history = client.get(f"/v1/cases/{case['dispute_id']}/history").json()
     assert [entry["action"] for entry in history].count("DRAFT_APPROVED") == 1
@@ -262,3 +334,95 @@ def test_packet_fails_closed_when_stored_bytes_are_changed() -> None:
 
     assert packet.status_code == 409
     assert "failed its SHA-256 check" in packet.json()["detail"]
+
+
+def test_conflicting_evidence_added_after_approval_blocks_packet_export() -> None:
+    client, _files = make_client()
+    case, draft = create_draft(client, 209)
+    approved = client.post(
+        review_url(case, draft),
+        json={"decision": "APPROVED"},
+        headers=OPERATOR_HEADERS,
+    )
+    added = client.post(
+        f"/v1/cases/{case['dispute_id']}/evidence",
+        json={
+            "evidence_id": "late_conflicting_invoice",
+            "evidence_type": "INVOICE",
+            "source_name": "late-conflicting-invoice.pdf",
+            "human_confirmed_source": True,
+            "order_id": "order_from_another_purchase",
+            "payment_id": case["payment_id"],
+            "amount": case["disputed_amount"],
+        },
+    )
+
+    packet = client.get(packet_url(case, draft), headers=OPERATOR_HEADERS)
+    new_draft = client.post(f"/v1/cases/{case['dispute_id']}/drafts")
+
+    assert approved.status_code == 201
+    assert added.status_code == 201
+    assert packet.status_code == 409
+    assert "not cross-source consistent" in packet.json()["detail"]
+    assert new_draft.status_code == 409
+    assert "NEEDS_REVIEW" in new_draft.json()["detail"]
+
+
+def test_matching_evidence_added_after_approval_makes_packet_stale() -> None:
+    client, _files = make_client()
+    case, draft = create_draft(client, 210)
+    client.post(
+        review_url(case, draft),
+        json={"decision": "APPROVED"},
+        headers=OPERATOR_HEADERS,
+    )
+    added = client.post(
+        f"/v1/cases/{case['dispute_id']}/evidence",
+        json={
+            "evidence_id": "late_matching_invoice",
+            "evidence_type": "INVOICE",
+            "source_name": "late-matching-invoice.pdf",
+            "human_confirmed_source": True,
+            "order_id": case["order_id"],
+            "payment_id": case["payment_id"],
+            "amount": case["disputed_amount"],
+        },
+    )
+
+    packet = client.get(packet_url(case, draft), headers=OPERATOR_HEADERS)
+
+    assert added.status_code == 201
+    assert packet.status_code == 409
+    assert "evidence changed after this draft" in packet.json()["detail"]
+
+
+def test_evidence_added_before_review_blocks_stale_draft_approval() -> None:
+    client, _files = make_client()
+    case, draft = create_draft(client, 211)
+    added = client.post(
+        f"/v1/cases/{case['dispute_id']}/evidence",
+        json={
+            "evidence_id": "preapproval_matching_invoice",
+            "evidence_type": "INVOICE",
+            "source_name": "preapproval-matching-invoice.pdf",
+            "human_confirmed_source": True,
+            "order_id": case["order_id"],
+            "payment_id": case["payment_id"],
+            "amount": case["disputed_amount"],
+        },
+    )
+
+    approval = client.post(
+        review_url(case, draft),
+        json={"decision": "APPROVED"},
+        headers=OPERATOR_HEADERS,
+    )
+    stored_review = client.get(
+        review_url(case, draft).removesuffix("s"),
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert added.status_code == 201
+    assert approval.status_code == 409
+    assert "evidence changed after this draft" in approval.json()["detail"]
+    assert stored_review.status_code == 404

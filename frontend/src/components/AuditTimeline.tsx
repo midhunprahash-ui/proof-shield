@@ -7,6 +7,7 @@ const actionLabels: Record<CaseHistoryEntry["action"], string> = {
   CASE_CLAIMED: "Case assigned",
   FILE_UPLOADED: "Source uploaded",
   EVIDENCE_ADDED: "Evidence recorded",
+  EVIDENCE_RESOLVED: "Evidence resolved",
   ASSESSED: "Case assessed",
   DRAFT_CREATED: "Response drafted",
   DRAFT_APPROVED: "Draft approved",

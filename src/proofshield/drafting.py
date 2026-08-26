@@ -10,6 +10,11 @@ from enum import StrEnum
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from proofshield.consistency import (
+    ConsistencyStatus,
+    EvidenceConsistencyAnalyzer,
+    EvidenceConsistencyReport,
+)
 from proofshield.domain import (
     Assessment,
     Decision,
@@ -65,6 +70,7 @@ class EvidenceGroundedDraftGenerator:
         self,
         case: DisputeCase,
         assessment: Assessment,
+        consistency: EvidenceConsistencyReport | None = None,
         *,
         created_at: datetime | None = None,
     ) -> ResponseDraft:
@@ -75,8 +81,17 @@ class EvidenceGroundedDraftGenerator:
                 f"case decision is {assessment.decision}; only SAFE_TO_DRAFT can be drafted"
             )
 
-        invoice = self._required_file_backed(case, EvidenceType.INVOICE)
-        delivery = self._required_file_backed(case, EvidenceType.DELIVERY_PROOF)
+        consistency = consistency or EvidenceConsistencyAnalyzer().analyze(case)
+        if consistency.dispute_id != case.dispute_id:
+            raise ValueError("consistency report and case dispute IDs must match")
+        if consistency.status != ConsistencyStatus.CONSISTENT:
+            raise DraftGenerationError("current evidence is not cross-source consistent")
+        excluded_ids = set(consistency.excluded_evidence_ids)
+
+        invoice = self._required_file_backed(case, EvidenceType.INVOICE, excluded_ids)
+        delivery = self._required_file_backed(
+            case, EvidenceType.DELIVERY_PROOF, excluded_ids
+        )
         citations = [
             self._citation(
                 "E1",
@@ -100,7 +115,8 @@ class EvidenceGroundedDraftGenerator:
             (
                 document
                 for document in case.evidence
-                if document.evidence_type == EvidenceType.CUSTOMER_COMMUNICATION
+                if document.evidence_id not in excluded_ids
+                and document.evidence_type == EvidenceType.CUSTOMER_COMMUNICATION
                 and document.source_verified
                 and document.reviewed_by_human
                 and document.customer_acknowledged_delivery is True
@@ -133,19 +149,7 @@ class EvidenceGroundedDraftGenerator:
             "submitted and must be approved by an authorized human reviewer."
         )
 
-        input_payload = {
-            "generator": DRAFT_GENERATOR,
-            "case": case.model_dump(mode="json"),
-            "assessment": {
-                "decision": assessment.decision,
-                "evidence_score": assessment.evidence_score,
-                "checks": [
-                    {"code": check.code, "outcome": check.outcome}
-                    for check in assessment.checks
-                ],
-            },
-        }
-        input_sha256 = self._sha256(input_payload)
+        input_sha256 = self.input_sha256(case, assessment, consistency)
         content_sha256 = self._sha256(
             {
                 "subject": subject,
@@ -170,15 +174,77 @@ class EvidenceGroundedDraftGenerator:
             created_at=generated_at,
         )
 
+    def input_sha256(
+        self,
+        case: DisputeCase,
+        assessment: Assessment,
+        consistency: EvidenceConsistencyReport | None = None,
+    ) -> str:
+        """Fingerprint all evidence and deterministic checks used by a draft."""
+
+        if assessment.dispute_id != case.dispute_id:
+            raise ValueError("assessment and case dispute IDs must match")
+        consistency = consistency or EvidenceConsistencyAnalyzer().analyze(case)
+        if consistency.dispute_id != case.dispute_id:
+            raise ValueError("consistency report and case dispute IDs must match")
+        input_payload = {
+            "generator": DRAFT_GENERATOR,
+            "case": case.model_dump(mode="json"),
+            "assessment": {
+                "decision": assessment.decision,
+                "evidence_score": assessment.evidence_score,
+                "checks": [
+                    {"code": check.code, "outcome": check.outcome}
+                    for check in assessment.checks
+                ],
+            },
+            "consistency": consistency.model_dump(mode="json"),
+        }
+        return self._sha256(input_payload)
+
+    def require_current(
+        self,
+        case: DisputeCase,
+        draft: ResponseDraft,
+        assessment: Assessment,
+        consistency: EvidenceConsistencyReport,
+    ) -> None:
+        """Refuse approval or export when a draft predates current case state."""
+
+        if draft.dispute_id != case.dispute_id:
+            raise DraftGenerationError("draft belongs to a different case")
+        if consistency.dispute_id != case.dispute_id:
+            raise DraftGenerationError(
+                "consistency report belongs to a different case"
+            )
+        if consistency.status != ConsistencyStatus.CONSISTENT:
+            raise DraftGenerationError(
+                "current evidence is not cross-source consistent; reassess and "
+                "create a new draft"
+            )
+        if assessment.decision != Decision.SAFE_TO_DRAFT:
+            raise DraftGenerationError(
+                f"current case decision is {assessment.decision}; reassess before approval"
+            )
+        if self.input_sha256(case, assessment, consistency) != draft.input_sha256:
+            raise DraftGenerationError(
+                "case evidence changed after this draft was created; reassess and "
+                "create a new draft"
+            )
+
     @staticmethod
     def _required_file_backed(
-        case: DisputeCase, evidence_type: EvidenceType
+        case: DisputeCase,
+        evidence_type: EvidenceType,
+        excluded_ids: set[str] | None = None,
     ) -> EvidenceDocument:
+        excluded_ids = excluded_ids or set()
         document = next(
             (
                 item
                 for item in case.evidence
                 if item.evidence_type == evidence_type
+                and item.evidence_id not in excluded_ids
             ),
             None,
         )

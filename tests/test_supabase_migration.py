@@ -12,6 +12,12 @@ REVIEW_MIGRATION = Path(
 AUTH_MIGRATION = Path(
     "supabase/migrations/20260826080225_operator_auth_and_ownership.sql"
 )
+RESOLUTION_MIGRATION = Path(
+    "supabase/migrations/20260826104022_evidence_resolution.sql"
+)
+RESOLUTION_INDEX_MIGRATION = Path(
+    "supabase/migrations/20260826110406_evidence_resolution_fk_indexes.sql"
+)
 TABLES = {
     "proofshield_cases",
     "proofshield_evidence",
@@ -141,3 +147,48 @@ def test_operator_mutation_rpcs_remain_service_role_only() -> None:
         statement_end = sql.index(";", revoke_position)
         statement = sql[revoke_position:statement_end]
         assert "public, anon, authenticated" in statement
+
+
+def test_evidence_resolutions_are_append_only_owned_and_indexed() -> None:
+    sql = RESOLUTION_MIGRATION.read_text(encoding="utf-8")
+
+    assert "create table public.proofshield_evidence_resolutions" in sql
+    assert "evidence_id text not null unique" in sql
+    assert "on delete restrict" in sql
+    assert "enable row level security" in sql
+    assert "grant select, insert" in sql
+    assert "grant select on table public.proofshield_evidence_resolutions" in sql
+    assert "to authenticated" in sql
+    assert "proofshield_operator_owns_case(dispute_id)" in sql
+    assert "proofshield_evidence_resolutions_dispute_idx" in sql
+    assert "proofshield_evidence_resolutions_replacement_idx" in sql
+    assert "grant update" not in sql
+    assert "grant delete" not in sql
+    assert "EVIDENCE_RESOLVED" in sql
+
+
+def test_resolution_rpc_is_service_only_and_database_validated() -> None:
+    sql = RESOLUTION_MIGRATION.read_text(encoding="utf-8")
+
+    assert "function public.proofshield_resolve_evidence" in sql
+    assert "security invoker" in sql
+    assert "set search_path = ''" in sql
+    assert "replacement evidence must" not in sql
+    assert "TYPE_MISMATCH" in sql
+    assert "TARGET_IS_REPLACEMENT" in sql
+    assert "REPLACEMENT_RESOLVED" in sql
+    revoke_position = sql.index(
+        "revoke execute on function public.proofshield_resolve_evidence"
+    )
+    statement_end = sql.index(";", revoke_position)
+    assert "public, anon, authenticated" in sql[revoke_position:statement_end]
+
+
+def test_resolution_composite_foreign_keys_have_covering_indexes() -> None:
+    sql = RESOLUTION_INDEX_MIGRATION.read_text(encoding="utf-8")
+
+    assert "proofshield_evidence_resolutions_source_case_idx" in sql
+    assert "(evidence_id, dispute_id)" in sql
+    assert "proofshield_evidence_resolutions_replacement_case_idx" in sql
+    assert "replacement_evidence_id" in sql
+    assert "dispute_id" in sql
