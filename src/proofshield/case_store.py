@@ -49,6 +49,7 @@ class ReviewNotFoundError(CaseStoreError):
 
 class CaseHistoryAction(StrEnum):
     CASE_CREATED = "CASE_CREATED"
+    CASE_CLAIMED = "CASE_CLAIMED"
     FILE_UPLOADED = "FILE_UPLOADED"
     EVIDENCE_ADDED = "EVIDENCE_ADDED"
     ASSESSED = "ASSESSED"
@@ -93,11 +94,19 @@ class EvidenceFileRecord(BaseModel):
 
 
 class CaseRepository(Protocol):
-    def save_case(self, case: DisputeCase, *, source: str) -> bool: ...
+    def save_case(
+        self, case: DisputeCase, *, source: str, owner_id: str | None = None
+    ) -> bool: ...
 
     def get_case(self, dispute_id: str) -> DisputeCase: ...
 
-    def list_cases(self) -> list[CaseSummary]: ...
+    def list_cases(self, *, owner_id: str | None = None) -> list[CaseSummary]: ...
+
+    def list_unassigned_cases(self) -> list[CaseSummary]: ...
+
+    def claim_case(self, dispute_id: str, owner_id: str) -> bool: ...
+
+    def require_case_owner(self, dispute_id: str, owner_id: str) -> None: ...
 
     def register_evidence_file(
         self,
@@ -175,7 +184,9 @@ class SupabaseCaseRepository:
     def __init__(self, client: Any) -> None:
         self.client = client
 
-    def save_case(self, case: DisputeCase, *, source: str) -> bool:
+    def save_case(
+        self, case: DisputeCase, *, source: str, owner_id: str | None = None
+    ) -> bool:
         core_case = case.model_copy(update={"evidence": []})
         result = _rpc_status(
             self.client,
@@ -190,6 +201,7 @@ class SupabaseCaseRepository:
                 "p_core_json": core_case.model_dump(mode="json"),
                 "p_core_sha256": model_sha256(core_case),
                 "p_source": source,
+                "p_owner_id": owner_id,
             },
         )
         if result == "CREATED":
@@ -199,6 +211,10 @@ class SupabaseCaseRepository:
         if result == "CONFLICT":
             raise CaseConflictError(
                 f"case {case.dispute_id} already exists with different core facts"
+            )
+        if result in {"OWNER_CONFLICT", "OWNER_NOT_AUTHORIZED"}:
+            raise CaseConflictError(
+                f"case {case.dispute_id} could not be assigned to this operator"
             )
         raise CaseStoreError(f"unexpected save-case status: {result}")
 
@@ -229,11 +245,59 @@ class SupabaseCaseRepository:
         ]
         return case.model_copy(update={"evidence": evidence})
 
-    def list_cases(self) -> list[CaseSummary]:
-        data = self.client.rpc("proofshield_list_cases").execute().data
+    def list_cases(self, *, owner_id: str | None = None) -> list[CaseSummary]:
+        data = (
+            self.client.rpc("proofshield_list_cases", {"p_owner_id": owner_id})
+            .execute()
+            .data
+        )
         if not isinstance(data, list):
             raise CaseStoreError("Supabase list-cases RPC returned an unexpected response")
         return [CaseSummary.model_validate(row) for row in data]
+
+    def list_unassigned_cases(self) -> list[CaseSummary]:
+        data = self.client.rpc("proofshield_list_unassigned_cases").execute().data
+        if not isinstance(data, list):
+            raise CaseStoreError(
+                "Supabase unassigned-cases RPC returned an unexpected response"
+            )
+        return [CaseSummary.model_validate(row) for row in data]
+
+    def claim_case(self, dispute_id: str, owner_id: str) -> bool:
+        result = _rpc_status(
+            self.client,
+            "proofshield_claim_case",
+            {
+                "p_dispute_id": dispute_id,
+                "p_owner_id": owner_id,
+            },
+        )
+        if result == "CLAIMED":
+            return True
+        if result == "EXISTS":
+            return False
+        if result == "CASE_NOT_FOUND":
+            raise CaseNotFoundError(f"case {dispute_id} was not found")
+        if result == "ALREADY_CLAIMED":
+            raise CaseConflictError(
+                f"case {dispute_id} was claimed by another operator"
+            )
+        if result == "OWNER_NOT_AUTHORIZED":
+            raise CaseConflictError("the operator is no longer active")
+        raise CaseStoreError(f"unexpected claim-case status: {result}")
+
+    def require_case_owner(self, dispute_id: str, owner_id: str) -> None:
+        rows = (
+            self.client.table("proofshield_cases")
+            .select("dispute_id")
+            .eq("dispute_id", dispute_id)
+            .eq("owner_id", owner_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            raise CaseNotFoundError(f"case {dispute_id} was not found")
 
     def register_evidence_file(
         self,
@@ -418,6 +482,7 @@ class SupabaseCaseRepository:
                 "p_review_id": review.review_id,
                 "p_decision": str(review.decision),
                 "p_reviewer_label": review.reviewer_label,
+                "p_reviewer_user_id": review.reviewer_user_id,
                 "p_note": review.note,
                 "p_request_sha256": review.request_sha256,
                 "p_review_json": review.model_dump(mode="json"),

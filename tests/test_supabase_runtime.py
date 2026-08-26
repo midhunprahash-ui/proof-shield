@@ -15,6 +15,7 @@ def test_settings_accept_only_matching_backend_project(monkeypatch) -> None:
         "SUPABASE_URL", "https://qoujhmqkjicvcwoiyqkp.supabase.co/"
     )
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test_only")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_test_only")
     monkeypatch.setenv("SUPABASE_EVIDENCE_BUCKET", "proofshield-evidence")
 
     settings = SupabaseSettings.from_env()
@@ -27,6 +28,7 @@ def test_settings_reject_wrong_project(monkeypatch) -> None:
     monkeypatch.setenv("SUPABASE_PROJECT_REF", "qoujhmqkjicvcwoiyqkp")
     monkeypatch.setenv("SUPABASE_URL", "https://wrongproject.supabase.co")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test_only")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_test_only")
 
     with pytest.raises(SupabaseConfigurationError, match="does not match"):
         SupabaseSettings.from_env()
@@ -38,6 +40,7 @@ def test_settings_reject_example_secret(monkeypatch) -> None:
         "SUPABASE_URL", "https://qoujhmqkjicvcwoiyqkp.supabase.co"
     )
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_replace_me")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_test_only")
 
     with pytest.raises(SupabaseConfigurationError, match="placeholder"):
         SupabaseSettings.from_env()
@@ -52,8 +55,21 @@ def test_settings_reject_public_keys(monkeypatch, key: str) -> None:
     monkeypatch.setenv(
         "SUPABASE_SECRET_KEY", _jwt_with_role("anon") if key == "legacy_anon_jwt" else key
     )
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_test_only")
 
     with pytest.raises(SupabaseConfigurationError, match="public key"):
+        SupabaseSettings.from_env()
+
+
+def test_settings_reject_secret_as_publishable_key(monkeypatch) -> None:
+    monkeypatch.setenv("SUPABASE_PROJECT_REF", "qoujhmqkjicvcwoiyqkp")
+    monkeypatch.setenv(
+        "SUPABASE_URL", "https://qoujhmqkjicvcwoiyqkp.supabase.co"
+    )
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test_only")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "sb_secret_not_public")
+
+    with pytest.raises(SupabaseConfigurationError, match="publishable/anon"):
         SupabaseSettings.from_env()
 
 

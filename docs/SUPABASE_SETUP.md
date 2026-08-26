@@ -27,11 +27,15 @@ supabase/migrations/20260823160507_proofshield_supabase_foundation.sql
 supabase/migrations/20260823170424_response_drafts.sql
 supabase/migrations/20260824070552_draft_reviews_and_evidence_packets.sql
 supabase/migrations/20260825080000_draft_reviews_foreign_key_index.sql
+supabase/migrations/20260826080225_operator_auth_and_ownership.sql
 ```
 
 The first two were applied on 2026-08-23. The review and index migrations were
 applied on 2026-08-25. Supabase records the four remote migration versions as
 `20260823160507`, `20260823170424`, `20260825073901`, and `20260825074158`.
+The operator-auth migration is repository-ready but is not yet recorded in the
+remote migration history; applying it requires explicit approval for a live
+schema change.
 Before any future schema change, use the `supabase-proofshield` MCP
 `get_project_url` tool and confirm the result is exactly:
 
@@ -79,13 +83,33 @@ SUPABASE_URL=https://qoujhmqkjicvcwoiyqkp.supabase.co
 SUPABASE_SECRET_KEY=your_backend_secret_key
 SUPABASE_EVIDENCE_BUCKET=proofshield-evidence
 RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
-PROOFSHIELD_OPERATOR_SECRET=your_separate_32_plus_character_operator_secret
+SUPABASE_PUBLISHABLE_KEY=your_browser_safe_publishable_key
 ```
 
 Use `SUPABASE_SERVICE_ROLE_KEY` only for a legacy project that does not yet have
 a modern secret key. ProofShield rejects publishable/anon keys for its backend
-persistence. Never commit `.env` and never prefix the secret with a frontend
+persistence. `SUPABASE_PUBLISHABLE_KEY` is intentionally browser-safe and is
+returned by local FastAPI at `/v1/auth/config`; it is not a replacement for the
+backend secret. Never commit `.env` and never prefix the secret with a frontend
 environment convention such as `VITE_`, `NEXT_PUBLIC_`, or `PUBLIC_`.
+
+## Named operator provisioning
+
+Public signup is intentionally absent. Provision an operator in two explicit
+steps:
+
+1. create and confirm an email/password user in Supabase Authentication;
+2. insert a matching active registry row using a trusted admin path:
+
+```sql
+insert into public.proofshield_operators (user_id, email, display_name)
+values ('<auth-user-uuid>', '<normalized-email>', '<display name>');
+```
+
+The UUID and email must match `auth.users`. Passwords never belong in SQL or
+Git. The local live-demo runner may receive operator email/password through
+process-only `PROOFSHIELD_DEMO_OPERATOR_EMAIL` and
+`PROOFSHIELD_DEMO_OPERATOR_PASSWORD` variables.
 
 ## Deployment boundary
 

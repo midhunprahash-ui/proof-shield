@@ -10,14 +10,13 @@ from proofshield.memory import (
     InMemoryEvidenceFileStore,
 )
 from scripts.run_live_demo import LiveDemoError, run_demo
-
-OPERATOR_SECRET = "test-operator-secret-with-32-characters"
+from tests.auth_helpers import TEST_ACCESS_TOKEN, TEST_AUTHENTICATOR
 
 
 def test_guarded_demo_verifies_the_complete_human_approved_flow() -> None:
     client = TestClient(
         create_app(
-            operator_secret=OPERATOR_SECRET,
+            operator_authenticator=TEST_AUTHENTICATOR,
             case_repository=InMemoryCaseRepository(),
             evidence_file_store=InMemoryEvidenceFileStore(),
             webhook_ledger=InMemoryEventLedger(),
@@ -26,7 +25,7 @@ def test_guarded_demo_verifies_the_complete_human_approved_flow() -> None:
 
     result = run_demo(
         client,
-        operator_secret=OPERATOR_SECRET,
+        access_token=TEST_ACCESS_TOKEN,
         label="unit-test",
         now=datetime(2026, 8, 25, 10, 0, tzinfo=UTC),
     )
@@ -41,16 +40,17 @@ def test_guarded_demo_verifies_the_complete_human_approved_flow() -> None:
     assert result["history_actions"].count("DRAFT_APPROVED") == 1
 
 
-def test_demo_rejects_a_short_operator_secret_before_writing() -> None:
-    with pytest.raises(LiveDemoError, match="at least 32"):
+def test_demo_rejects_a_missing_access_token_before_writing() -> None:
+    with pytest.raises(LiveDemoError, match="access token"):
         run_demo(
             TestClient(
                 create_app(
+                    operator_authenticator=TEST_AUTHENTICATOR,
                     case_repository=InMemoryCaseRepository(),
                     evidence_file_store=InMemoryEvidenceFileStore(),
                     webhook_ledger=InMemoryEventLedger(),
                 )
             ),
-            operator_secret="too-short",
+            access_token="too-short",
             label="must-not-write",
         )

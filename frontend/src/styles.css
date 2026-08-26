@@ -423,6 +423,11 @@ code {
 .sealed-review strong { color: #29364c; font-size: 0.75rem; }
 .sealed-review p { margin: 4px 0; color: #69758a; font-size: 0.68rem; }
 .sealed-review small { color: #9099a8; font-size: 0.61rem; }
+.verified-reviewer { display: flex; min-height: 56px; align-items: center; gap: 10px; padding: 10px 12px; background: var(--green-soft); border: 1px solid #cceade; border-radius: 9px; }
+.verified-reviewer > span { display: grid; width: 30px; height: 30px; place-items: center; color: var(--green); background: #fff; border-radius: 8px; }
+.verified-reviewer div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.verified-reviewer strong { color: #234c42; font-size: 0.7rem; }
+.verified-reviewer small { overflow: hidden; color: #5d7d75; font-size: 0.61rem; text-overflow: ellipsis; white-space: nowrap; }
 
 .timeline-card { max-width: 860px; }
 .timeline-list { margin: 0; padding: 0; list-style: none; }
@@ -444,15 +449,18 @@ code {
 .error-panel > p:not(.eyebrow) { max-width: 560px; margin-bottom: 14px; color: var(--muted); font-size: 0.75rem; }
 .error-panel code { max-width: 660px; margin-bottom: 21px; padding: 10px 13px; color: #6d788c; background: #e9edf4; border-radius: 7px; }
 
-.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: rgba(7, 14, 27, 0.7); backdrop-filter: blur(8px); }
-.operator-dialog { position: relative; width: min(440px, 100%); padding: 34px; background: #fff; border: 1px solid #e1e6ee; border-radius: 17px; box-shadow: 0 28px 90px rgba(0, 0, 0, 0.28); }
-.dialog-close { position: absolute; top: 17px; right: 17px; }
-.dialog-lock { display: grid; width: 54px; height: 54px; margin-bottom: 18px; place-items: center; color: var(--blue); background: var(--blue-soft); border-radius: 14px; }
-.operator-dialog h2 { margin-bottom: 9px; color: var(--ink); font-size: 1.35rem; letter-spacing: -0.03em; }
-.operator-dialog > p:not(.eyebrow) { margin-bottom: 20px; color: var(--muted); font-size: 0.73rem; line-height: 1.6; }
-.operator-dialog input { min-height: 43px; margin-bottom: 14px; }
 .full-button { width: 100%; }
-.operator-dialog > small { display: block; margin-top: 12px; color: #919aa8; font-size: 0.61rem; text-align: center; }
+.auth-shell { display: grid; min-height: 100vh; place-items: center; padding: 28px; background: radial-gradient(circle at 50% 10%, #173766 0, #0b172b 42%, #07101f 100%); }
+.auth-card { width: min(450px, 100%); padding: 38px; background: #fff; border: 1px solid rgba(255, 255, 255, 0.7); border-radius: 18px; box-shadow: 0 30px 100px rgba(0, 0, 0, 0.35); }
+.auth-mark { display: grid; width: 58px; height: 58px; margin-bottom: 20px; place-items: center; color: var(--blue); background: var(--blue-soft); border-radius: 16px; }
+.auth-card h1 { margin: 6px 0 10px; color: var(--ink); font-size: 1.65rem; letter-spacing: -0.04em; }
+.auth-card > p:not(.eyebrow) { margin-bottom: 22px; color: var(--muted); font-size: 0.73rem; line-height: 1.65; }
+.auth-card label { display: flex; margin-bottom: 14px; flex-direction: column; gap: 7px; color: #586579; font-size: 0.68rem; font-weight: 600; }
+.auth-card input { min-height: 44px; padding: 10px 12px; color: var(--ink); background: #fbfcfe; border: 1px solid #dce2ea; border-radius: 8px; outline: none; }
+.auth-card input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+.auth-card > small { display: block; margin-top: 14px; color: #919aa8; font-size: 0.61rem; line-height: 1.5; text-align: center; }
+.auth-error { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px; padding: 11px 12px; color: #9d3030; background: var(--red-soft); border: 1px solid #f0c8c8; border-radius: 9px; font-size: 0.68rem; line-height: 1.45; }
+.auth-status { display: flex; align-items: center; flex-direction: column; color: #46536a; text-align: center; }
 .toast { position: fixed; right: 25px; bottom: 25px; z-index: 60; display: flex; max-width: 420px; min-height: 48px; align-items: center; gap: 9px; padding: 12px 16px; color: #314057; background: #fff; border: 1px solid #dce3ed; border-left: 4px solid var(--green); border-radius: 10px; box-shadow: 0 20px 50px rgba(14, 31, 63, 0.16); font-size: 0.72rem; }
 .toast-good .icon { color: var(--green); }
 .toast-danger { border-left-color: var(--red); }

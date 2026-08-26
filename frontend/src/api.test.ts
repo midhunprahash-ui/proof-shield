@@ -36,7 +36,7 @@ describe("ProofShieldApi", () => {
     );
   });
 
-  test("sends operator authority in a header and not in the request body", async () => {
+  test("sends the Supabase bearer token and not a reviewer identity in the body", async () => {
     let captured: RequestInit | undefined;
     const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       captured = init;
@@ -45,15 +45,77 @@ describe("ProofShieldApi", () => {
         decision: "APPROVED",
       });
     }) as typeof fetch;
-    const api = new ProofShieldApi("http://api.local", fetcher);
+    const api = new ProofShieldApi(
+      "http://api.local",
+      fetcher,
+      () => "verified-access-token",
+    );
 
-    await api.getReview("dp_1", "draft_1", "s".repeat(32));
+    await api.getReview("dp_1", "draft_1");
 
-    expect(new Headers(captured?.headers).get("X-ProofShield-Operator-Secret")).toBe(
-      "s".repeat(32),
+    expect(new Headers(captured?.headers).get("Authorization")).toBe(
+      "Bearer verified-access-token",
     );
     expect(captured?.body).toBeUndefined();
-    expect("operatorSecret" in (captured ?? {})).toBe(false);
+  });
+
+  test("review decisions contain no caller-controlled reviewer label", async () => {
+    let body = "";
+    const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = String(init?.body ?? "");
+      return jsonResponse({ review_id: "review_1", decision: "APPROVED" });
+    }) as typeof fetch;
+    const api = new ProofShieldApi(
+      "http://api.local",
+      fetcher,
+      () => "verified-access-token",
+    );
+
+    await api.reviewDraft("dp_1", "draft_1", {
+      decision: "APPROVED",
+      note: "Checked against source files.",
+    });
+
+    expect(JSON.parse(body)).toEqual({
+      decision: "APPROVED",
+      note: "Checked against source files.",
+    });
+    expect(body.includes("reviewer_label")).toBe(false);
+  });
+
+  test("lists and claims unassigned webhook cases with bearer auth", async () => {
+    const requested: Array<{ url: string; method: string; authorization: string | null }> = [];
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requested.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        authorization: new Headers(init?.headers).get("Authorization"),
+      });
+      return String(input).endsWith("/claim")
+        ? jsonResponse({ dispute_id: "dp_claim" })
+        : jsonResponse([{ dispute_id: "dp_claim" }]);
+    }) as typeof fetch;
+    const api = new ProofShieldApi(
+      "http://api.local",
+      fetcher,
+      () => "verified-access-token",
+    );
+
+    await api.listUnassignedCases();
+    await api.claimCase("dp_claim");
+
+    expect(requested).toEqual([
+      {
+        url: "http://api.local/v1/cases/unassigned",
+        method: "GET",
+        authorization: "Bearer verified-access-token",
+      },
+      {
+        url: "http://api.local/v1/cases/dp_claim/claim",
+        method: "POST",
+        authorization: "Bearer verified-access-token",
+      },
+    ]);
   });
 
   test("surfaces FastAPI validation detail as a readable error", async () => {

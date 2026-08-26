@@ -81,12 +81,11 @@ has a realistic end-to-end demonstration. It is labelled `demo_*` throughout
 and contains no customer data. The process-only operator secret used for this
 verification was not saved to `.env`, Git, Supabase, or the result output.
 
-Before deployment, replace the shared operator secret with named Supabase Auth
-identities, case ownership, and narrow RLS policies. Razorpay submission is not
-implemented and remains out of scope.
+Milestone 10 replaces the shared operator secret locally with named Supabase
+Auth identities, case ownership, and narrow read-only RLS policies. Razorpay
+submission is not implemented and remains out of scope.
 
 ## Next milestone
 
-Add named operator authentication and ownership-aware authorization locally,
-then run the dashboard against the retained demo. Deployment remains a later,
-explicit decision.
+See `MILESTONE_10_OPERATOR_AUTH.md` for the implementation and remote activation
+status. Deployment remains a later, explicit decision.

@@ -4,6 +4,7 @@ import { Icon } from "./Icon";
 
 const actionLabels: Record<CaseHistoryEntry["action"], string> = {
   CASE_CREATED: "Case created",
+  CASE_CLAIMED: "Case assigned",
   FILE_UPLOADED: "Source uploaded",
   EVIDENCE_ADDED: "Evidence recorded",
   ASSESSED: "Case assessed",
