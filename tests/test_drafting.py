@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from proofshield.domain import Decision, EvidenceType
+from proofshield.domain import Decision, EvidenceDocument, EvidenceType
 from proofshield.drafting import (
     DraftGenerationError,
     DraftStatus,
@@ -97,3 +97,26 @@ def test_safe_but_non_file_backed_evidence_refuses_to_draft() -> None:
     assert assessment.decision == Decision.SAFE_TO_DRAFT
     with pytest.raises(DraftGenerationError, match="uploaded file with a hash"):
         EvidenceGroundedDraftGenerator().generate(case, assessment)
+
+
+def test_draft_input_fingerprint_changes_when_matching_evidence_is_added() -> None:
+    case = file_backed_case(5)
+    assessor = CaseAssessor()
+    generator = EvidenceGroundedDraftGenerator()
+    first_assessment = assessor.assess(case, evaluated_at=EVALUATED_AT)
+    first_fingerprint = generator.input_sha256(case, first_assessment)
+    case.evidence.append(
+        EvidenceDocument(
+            evidence_id="invoice_additional_match",
+            evidence_type=EvidenceType.INVOICE,
+            source_verified=True,
+            reviewed_by_human=True,
+            order_id=case.order_id,
+            payment_id=case.payment_id,
+            amount=case.disputed_amount,
+        )
+    )
+    second_assessment = assessor.assess(case, evaluated_at=EVALUATED_AT)
+
+    assert second_assessment.decision == Decision.SAFE_TO_DRAFT
+    assert generator.input_sha256(case, second_assessment) != first_fingerprint

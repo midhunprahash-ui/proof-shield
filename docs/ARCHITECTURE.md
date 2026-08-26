@@ -141,7 +141,7 @@ Document extraction provider
 Advisory cross-source consistency analyzer
   - compares every confirmed evidence record
   - names conflicts, missing facts and unverified sources
-  - calculated on demand; never approves or persists a decision
+  - calculated on demand; never approves or persists a chargeback decision
        |
        v
 Deterministic verifier
@@ -162,8 +162,10 @@ Any extraction component may propose facts, but it cannot mark its own claims as
 verified. Source verification comes from an explicit human confirmation or a
 future trusted integration adapter.
 The consistency analyzer reads only structured, confirmed evidence records and
-returns a derived advisory report. It does not change the case, assessment, or
-drafting decision.
+returns a derived report. The report never decides a chargeback, but the
+deterministic verifier maps conflicts, missing required facts, and unverified
+sources to failed draft-readiness checks. A later conflicting record therefore
+cannot be hidden behind the first invoice or delivery proof.
 The deterministic verifier remains the final gate before a response can be
 drafted. Final submission always requires a human.
 
@@ -195,6 +197,11 @@ raw evidence downloads. Approval does not submit a response; it only unlocks a
 deterministic ZIP whose cited Storage objects are re-hashed before inclusion.
 The caller cannot supply the reviewer label; the backend stamps the verified
 Auth user ID and registry-controlled display name.
+
+Packet export re-runs consistency and assessment against the current append-only
+evidence set. Any evidence added after drafting changes the deterministic input
+fingerprint and invalidates the old approval. Version 2 packets include a hashed
+`consistency-report.json` whose digest is sealed into the manifest.
 
 ## Current frontend boundary
 

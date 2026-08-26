@@ -45,7 +45,9 @@ review boundary.
 After confirmation, ProofShield compares every structured evidence record instead
 of trusting the first invoice or delivery proof. The Evidence tab names missing
 requirements, unverified sources, and conflicting IDs, amounts, statuses, or
-acknowledgements. This report is calculated on demand and remains advisory.
+acknowledgements. The report never decides the chargeback, but deterministic
+conflicts and unverified sources now block response drafting until they are
+resolved and reassessed.
 
 ## Why this architecture
 
@@ -238,3 +240,5 @@ benchmark.
 See [Milestone 13](docs/MILESTONE_13_EVIDENCE_CONSISTENCY.md) for deterministic
 cross-source comparisons, named conflicts and missing facts, and the advisory
 operator review boundary.
+See [Milestone 14](docs/MILESTONE_14_CONSISTENCY_GATE.md) for all-source drafting
+gates, stale-approval refusal, and consistency reports inside evidence packets.

@@ -111,3 +111,8 @@ image similarity, handwriting, or timestamps beyond the existing typed facts.
 A future milestone can decide how deterministic consistency findings should
 participate in the drafting gate and evidence packet. That change must be tested
 as a separate policy decision and must still require final human approval.
+
+That policy hardening is now implemented separately in
+`MILESTONE_14_CONSISTENCY_GATE.md`. The report still never decides the chargeback;
+Milestone 14 uses only deterministic report states to protect drafting and packet
+export.

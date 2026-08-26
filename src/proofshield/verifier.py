@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from proofshield.consistency import ConsistencyStatus, EvidenceConsistencyAnalyzer
 from proofshield.domain import (
     Assessment,
     CheckOutcome,
@@ -42,6 +43,14 @@ def _money_matches(left: Decimal, right: Decimal) -> bool:
 class CaseAssessor:
     """Assess whether evidence is safe to use in a drafted dispute response."""
 
+    def __init__(
+        self,
+        consistency_analyzer: EvidenceConsistencyAnalyzer | None = None,
+    ) -> None:
+        self.consistency_analyzer = (
+            consistency_analyzer or EvidenceConsistencyAnalyzer()
+        )
+
     def assess(
         self, case: DisputeCase, *, evaluated_at: datetime | None = None
     ) -> Assessment:
@@ -55,6 +64,7 @@ class CaseAssessor:
         checks.extend(self._check_invoice(case))
         checks.extend(self._check_delivery(case))
         checks.extend(self._check_optional_customer_acknowledgement(case))
+        checks.append(self._check_cross_source_consistency(case))
 
         decision = self._decide(checks)
         passed = sum(check.outcome == CheckOutcome.PASS for check in checks)
@@ -82,6 +92,44 @@ class CaseAssessor:
             summary=summaries[decision],
             checks=checks,
             evaluated_at=evaluated_at,
+        )
+
+    def _check_cross_source_consistency(
+        self,
+        case: DisputeCase,
+    ) -> VerificationCheck:
+        report = self.consistency_analyzer.analyze(case)
+        if report.status == ConsistencyStatus.CONSISTENT:
+            return _check(
+                "CROSS_SOURCE_CONSISTENT",
+                CheckOutcome.PASS,
+                "Every confirmed evidence record agrees on the checked facts.",
+            )
+        if report.status == ConsistencyStatus.CONFLICTS_FOUND:
+            return _check(
+                "CROSS_SOURCE_CONFLICT",
+                CheckOutcome.FAIL,
+                (
+                    f"{report.conflict_count} cross-source fact conflicts require "
+                    "operator review before drafting."
+                ),
+            )
+        if report.status == ConsistencyStatus.UNVERIFIED_SOURCES:
+            return _check(
+                "CROSS_SOURCE_UNVERIFIED",
+                CheckOutcome.FAIL,
+                (
+                    f"{report.unverified_count} evidence sources are unverified; "
+                    "all recorded sources must be reviewed before drafting."
+                ),
+            )
+        return _check(
+            "CROSS_SOURCE_INCOMPLETE",
+            CheckOutcome.FAIL,
+            (
+                f"{report.missing_count} required source or fact checks are missing "
+                "from the complete evidence set."
+            ),
         )
 
     @staticmethod

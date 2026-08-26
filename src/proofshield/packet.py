@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from proofshield.case_store import EvidenceFileRecord
+from proofshield.consistency import ConsistencyStatus, EvidenceConsistencyReport
 from proofshield.domain import DisputeCase
 from proofshield.drafting import ResponseDraft
 from proofshield.reviewing import DraftReview, ReviewDecision
 
-PACKET_FORMAT = "proofshield-evidence-packet-v1"
+PACKET_FORMAT = "proofshield-evidence-packet-v2"
 
 
 class EvidencePacketError(RuntimeError):
@@ -35,6 +36,7 @@ def build_evidence_packet(
     draft: ResponseDraft,
     review: DraftReview,
     files: Iterable[tuple[EvidenceFileRecord, bytes]],
+    consistency: EvidenceConsistencyReport,
 ) -> EvidencePacket:
     if draft.dispute_id != case.dispute_id or review.dispute_id != case.dispute_id:
         raise EvidencePacketError("case, draft, and review dispute IDs must match")
@@ -42,6 +44,12 @@ def build_evidence_packet(
         raise EvidencePacketError("review does not belong to this draft")
     if review.decision != ReviewDecision.APPROVED:
         raise EvidencePacketError("only an approved draft can be exported")
+    if consistency.dispute_id != case.dispute_id:
+        raise EvidencePacketError("consistency report belongs to a different case")
+    if consistency.status != ConsistencyStatus.CONSISTENT:
+        raise EvidencePacketError(
+            "current evidence is not cross-source consistent; reassess before export"
+        )
 
     by_file_id = {record.metadata.file_id: (record, content) for record, content in files}
     evidence_entries: list[dict[str, object]] = []
@@ -87,6 +95,8 @@ def build_evidence_packet(
         )
         evidence_blobs.append((packet_path, content))
 
+    consistency_json = consistency.model_dump(mode="json")
+    consistency_sha256 = _json_sha256(consistency_json)
     manifest_core = {
         "format": PACKET_FORMAT,
         "dispute_id": case.dispute_id,
@@ -96,6 +106,8 @@ def build_evidence_packet(
         "review_decision": review.decision,
         "reviewed_at": review.created_at,
         "reviewer_label": review.reviewer_label,
+        "consistency_status": consistency.status,
+        "consistency_report_sha256": consistency_sha256,
         "evidence": evidence_entries,
     }
     manifest_sha256 = _json_sha256(manifest_core)
@@ -121,6 +133,12 @@ def build_evidence_packet(
             archive,
             "review.json",
             review.model_dump(mode="json"),
+            timestamp,
+        )
+        _write_json(
+            archive,
+            "consistency-report.json",
+            consistency_json,
             timestamp,
         )
         _write_bytes(

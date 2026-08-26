@@ -79,6 +79,7 @@ from proofshield.packet import EvidencePacketError, build_evidence_packet
 from proofshield.reviewing import (
     DraftReview,
     DraftReviewRequest,
+    ReviewDecision,
     create_draft_review,
 )
 from proofshield.supabase_runtime import (
@@ -679,7 +680,17 @@ def create_app(
     ) -> DraftReview:
         try:
             require_owned_case(dispute_id, operator)
-            cases().get_draft(dispute_id, draft_id)
+            draft = cases().get_draft(dispute_id, draft_id)
+            if request.decision == ReviewDecision.APPROVED:
+                case = cases().get_case(dispute_id)
+                consistency = consistency_analyzer.analyze(case)
+                current_assessment = assessor.assess(case)
+                draft_generator.require_current(
+                    case,
+                    draft,
+                    current_assessment,
+                    consistency,
+                )
             review = create_draft_review(
                 dispute_id,
                 draft_id,
@@ -700,6 +711,11 @@ def create_app(
                 detail=str(error),
             ) from error
         except ReviewConflictError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        except DraftGenerationError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(error),
@@ -740,13 +756,27 @@ def create_app(
             case = cases().get_case(dispute_id)
             draft = cases().get_draft(dispute_id, draft_id)
             review = cases().get_review(dispute_id, draft_id)
+            consistency = consistency_analyzer.analyze(case)
+            current_assessment = assessor.assess(case)
+            draft_generator.require_current(
+                case,
+                draft,
+                current_assessment,
+                consistency,
+            )
             source_files = []
             for citation in draft.citations:
                 record = cases().get_evidence_file_record(
                     dispute_id, citation.source_file_id
                 )
                 source_files.append((record, files().read(record.storage_key)))
-            packet = build_evidence_packet(case, draft, review, source_files)
+            packet = build_evidence_packet(
+                case,
+                draft,
+                review,
+                source_files,
+                consistency,
+            )
         except (CaseNotFoundError, DraftNotFoundError) as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -763,6 +793,11 @@ def create_app(
                 detail=str(error),
             ) from error
         except EvidencePacketError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        except DraftGenerationError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(error),

@@ -452,7 +452,8 @@ function ConsistencyReport({ report }: { report: EvidenceConsistencyReport }) {
         <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
       </div>
       <p className="muted-copy consistency-summary">
-        {report.summary} This check is advisory and always requires operator review.
+        {report.summary} This report never decides the chargeback. Deterministic
+        conflicts block drafting until an operator corrects or resolves the evidence.
       </p>
       <div className="consistency-metrics" aria-label="Consistency finding counts">
         <span><strong>{report.conflict_count}</strong> conflicts</span>
