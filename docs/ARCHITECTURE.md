@@ -104,7 +104,9 @@ Upload evidence source to private Supabase Storage
        |
        v
 Provider-independent extraction proposal
-  - JSON pointer or text line reference per field
+  - deterministic labels for JSON and UTF-8 text
+  - local PP-OCRv6 for PDF, PNG and JPEG
+  - JSON pointer, text line, or OCR page-and-box reference per field
   - score is not a calibrated probability
   - cannot mark evidence as verified
        |
@@ -131,8 +133,9 @@ Payment, order and merchant-evidence adapters
        |
        v
 Document extraction provider
-  - deterministic labelled-field baseline now
-  - OCR or document model later for PDF/images
+  - deterministic labelled fields for JSON/text
+  - local PP-OCRv6 for PDF/images
+  - stable provider contract for an optional cloud adapter later
        |
        v
 Deterministic verifier
@@ -161,6 +164,12 @@ Supabase is currently the only cloud system. It provides Postgres, transaction-s
 webhook idempotency, append-only audit/history tables, and a private evidence
 bucket. The API and frontend are not deployed. This keeps today’s architecture
 simple while allowing either component to be hosted elsewhere later.
+
+OCR runs inside the local FastAPI process after a backend-only read from private
+Storage and a fresh SHA-256 check. The current PaddleOCR provider is replaceable;
+a future cloud provider must remain backend-only and return the same located,
+unverified observations. Changing providers cannot weaken case ownership,
+provenance checks, or human confirmation.
 
 All public-schema ProofShield tables use RLS. The operator-auth migration adds
 read-only policies that require an active registry row and case ownership.

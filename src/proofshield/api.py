@@ -46,12 +46,12 @@ from proofshield.drafting import (
 )
 from proofshield.evidence import EvidenceSubmission
 from proofshield.extraction import (
-    DeterministicEvidenceExtractor,
     EvidenceExtractionError,
     EvidenceExtractionProposal,
     EvidenceExtractionRequest,
     EvidenceExtractor,
     UnsupportedExtractionSource,
+    build_configured_evidence_extractor,
 )
 from proofshield.file_store import (
     MAX_EVIDENCE_FILE_BYTES,
@@ -62,6 +62,7 @@ from proofshield.file_store import (
     UnsupportedEvidenceFile,
     safe_original_name,
 )
+from proofshield.ocr import OcrProviderUnavailable
 from proofshield.operator_auth import (
     InvalidOperatorToken,
     OperatorAuthenticationUnavailable,
@@ -145,7 +146,7 @@ def create_app(
     assessor = CaseAssessor()
     draft_generator = EvidenceGroundedDraftGenerator()
     configured_secret = webhook_secret or os.getenv("RAZORPAY_WEBHOOK_SECRET")
-    configured_extractor = evidence_extractor or DeterministicEvidenceExtractor()
+    configured_extractor = evidence_extractor or build_configured_evidence_extractor()
 
     supplied_components = (case_repository, evidence_file_store, webhook_ledger)
     if any(component is not None for component in supplied_components) and not all(
@@ -485,6 +486,11 @@ def create_app(
         except UnsupportedExtractionSource as error:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=str(error),
+            ) from error
+        except OcrProviderUnavailable as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(error),
             ) from error
         except EvidenceExtractionError as error:

@@ -228,8 +228,9 @@ export function EvidencePanel({
             <StatusBadge tone="warning">Never auto-verified</StatusBadge>
           </div>
           <p className="muted-copy">
-            The local baseline reads exact labels from JSON or text. Every value
-            keeps a source reference and must be reviewed before submission.
+            JSON and text use exact-label parsing. PDF and image sources use the
+            configured local OCR provider. Every value keeps a source reference
+            and must be reviewed before submission.
           </p>
           <div className="form-grid extraction-selectors">
             <label>
@@ -276,6 +277,9 @@ export function EvidencePanel({
           </button>
           {proposal ? (
             <div className="extraction-proposal">
+              <p className="muted-copy">
+                Extractor: <code>{proposal.extractor}</code>
+              </p>
               {proposal.claims.map((claim) => (
                 <div key={claim.field}>
                   <span>{claim.field.replaceAll("_", " ")}</span>

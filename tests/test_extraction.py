@@ -7,8 +7,24 @@ from proofshield.extraction import (
     DeterministicEvidenceExtractor,
     EvidenceExtractionError,
     ExtractionField,
+    RoutingEvidenceExtractor,
     UnsupportedExtractionSource,
+    build_configured_evidence_extractor,
 )
+from proofshield.ocr import OcrTextObservation
+
+
+class StaticOcrProvider:
+    name = "test-local-ocr"
+
+    def __init__(self, observations: list[OcrTextObservation]) -> None:
+        self.observations = observations
+        self.calls = 0
+
+    def read(self, content: bytes, *, content_type: str) -> list[OcrTextObservation]:
+        del content, content_type
+        self.calls += 1
+        return self.observations
 
 
 def extract(content: bytes, content_type: str, evidence_type: EvidenceType):
@@ -87,3 +103,140 @@ def test_registered_hash_must_match_source_bytes() -> None:
             source_file_id="file_test",
             source_sha256="0" * 64,
         )
+
+
+def test_ocr_image_returns_located_unverified_invoice_proposals() -> None:
+    provider = StaticOcrProvider(
+        [
+            OcrTextObservation(
+                page=1,
+                text="Order ID:",
+                confidence=0.97,
+                bounding_box=(10, 20, 100, 45),
+            ),
+            OcrTextObservation(
+                page=1,
+                text="order_ocr_12",
+                confidence=0.96,
+                bounding_box=(120, 20, 260, 45),
+            ),
+            OcrTextObservation(
+                page=1,
+                text="Payment ID: pay_ocr_12",
+                confidence=0.95,
+                bounding_box=(10, 70, 280, 95),
+            ),
+            OcrTextObservation(
+                page=1,
+                text="Invoice amount: INR 1,249.50",
+                confidence=0.93,
+                bounding_box=(10, 120, 300, 145),
+            ),
+        ]
+    )
+    extractor = RoutingEvidenceExtractor(provider)
+    content = b"\x89PNG\r\n\x1a\nsynthetic"
+
+    proposal = extractor.extract(
+        content,
+        content_type="image/png",
+        evidence_type=EvidenceType.INVOICE,
+        source_file_id="file_ocr",
+        source_sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+    assert proposal.extractor == "test-local-ocr+labelled-fields-v1"
+    assert proposal.human_confirmation_required is True
+    assert {
+        claim.field: (claim.value, claim.source_reference)
+        for claim in proposal.claims
+    } == {
+        ExtractionField.ORDER_ID: (
+            "order_ocr_12",
+            "page 1, box [10,20,260,45]",
+        ),
+        ExtractionField.PAYMENT_ID: (
+            "pay_ocr_12",
+            "page 1, box [10,70,280,95]",
+        ),
+        ExtractionField.AMOUNT: (
+            "1249.50",
+            "page 1, box [10,120,300,145]",
+        ),
+    }
+    assert "source_verified" not in proposal.model_dump()
+
+
+def test_ocr_hash_is_checked_before_the_provider_receives_bytes() -> None:
+    provider = StaticOcrProvider([])
+    extractor = RoutingEvidenceExtractor(provider)
+
+    with pytest.raises(EvidenceExtractionError, match="SHA-256"):
+        extractor.extract(
+            b"synthetic",
+            content_type="image/jpeg",
+            evidence_type=EvidenceType.INVOICE,
+            source_file_id="file_ocr",
+            source_sha256="0" * 64,
+        )
+
+    assert provider.calls == 0
+
+
+def test_low_confidence_ocr_text_is_not_proposed() -> None:
+    provider = StaticOcrProvider(
+        [
+            OcrTextObservation(
+                page=1,
+                text="Order ID: guessed-order",
+                confidence=0.2,
+                bounding_box=(1, 1, 100, 20),
+            )
+        ]
+    )
+    extractor = RoutingEvidenceExtractor(provider, minimum_ocr_confidence=0.5)
+    content = b"synthetic"
+
+    proposal = extractor.extract(
+        content,
+        content_type="image/jpeg",
+        evidence_type=EvidenceType.INVOICE,
+        source_file_id="file_ocr",
+        source_sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+    assert proposal.claims == []
+    assert any("confidence floor" in warning for warning in proposal.warnings)
+
+
+def test_configured_extractor_can_disable_ocr_without_disabling_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROOFSHIELD_OCR_PROVIDER", "disabled")
+    extractor = build_configured_evidence_extractor()
+    content = b"Order ID: order_text_12"
+
+    proposal = extractor.extract(
+        content,
+        content_type="text/plain",
+        evidence_type=EvidenceType.INVOICE,
+        source_file_id="file_text",
+        source_sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+    assert proposal.claims[0].value == "order_text_12"
+    with pytest.raises(UnsupportedExtractionSource, match="disabled"):
+        extractor.extract(
+            b"synthetic image",
+            content_type="image/png",
+            evidence_type=EvidenceType.INVOICE,
+            source_file_id="file_image",
+            source_sha256=hashlib.sha256(b"synthetic image").hexdigest(),
+        )
+
+
+def test_unknown_ocr_provider_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROOFSHIELD_OCR_PROVIDER", "unknown-cloud")
+
+    with pytest.raises(ValueError, match="must be 'paddle' or 'disabled'"):
+        build_configured_evidence_extractor()

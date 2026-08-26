@@ -22,10 +22,16 @@ dev = [
   "pytest>=8.4,<9",
   "ruff>=0.12,<1",
 ]
+ocr = [
+  "paddleocr==3.7.0",
+  "paddlepaddle==3.2.1",
+  "Pillow==12.3.0",
+]
 
 [project.scripts]
 proofshield-generate = "proofshield.synthetic:main"
 proofshield-evaluate-extraction = "proofshield.extraction_evaluation:main"
+proofshield-evaluate-ocr = "proofshield.ocr_evaluation:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

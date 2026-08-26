@@ -34,12 +34,13 @@ the operator one workspace for the dispute queue, evidence upload and reviewed
 fact entry, deterministic assessment, cited response drafting, final human
 review, packet download, and the append-only audit timeline.
 
-Uploaded JSON and UTF-8 text evidence can also pass through a deterministic,
-provider-independent extraction baseline. It returns proposed fields with
-scores and exact JSON-pointer or line references. Proposals are never verified
-automatically: the operator must review editable values and explicitly confirm
-the source before an append-only evidence record is created. PDF/image
-extraction stays disabled until a real OCR or document provider is configured.
+Uploaded JSON and UTF-8 text evidence passes through deterministic labelled-field
+extraction. PDF, PNG, and JPEG evidence can now use local PP-OCRv6. OCR proposals
+include scores plus exact page and bounding-box references. Proposals are never
+verified automatically: the operator must review editable values and explicitly
+confirm the source before an append-only evidence record is created. A stable
+provider contract keeps a future cloud OCR adapter behind the same API and human
+review boundary.
 
 ## Why this architecture
 
@@ -62,7 +63,7 @@ future frontend still run locally until deployment is explicitly chosen.
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e '.[dev,ocr]'
 cp .env.example .env
 # Add the backend-only Supabase secret, browser-safe publishable key, and webhook secret.
 set -a
@@ -133,6 +134,19 @@ proofshield-generate --count 60 --output data/synthetic/disputes.jsonl
 The generator creates development fixtures, not final evaluation evidence. The
 held-out evaluation set will be independently reviewed and separated by case
 template so near-duplicate documents cannot leak between development and test.
+
+Generate and run the clean synthetic OCR smoke benchmark with:
+
+```bash
+python scripts/generate_synthetic_ocr_fixtures.py
+python -m proofshield.ocr_evaluation \
+  --input data/synthetic/ocr/ocr_cases.jsonl
+```
+
+The first run downloads PP-OCRv6 weights to the local PaddleX cache. It does not
+upload the benchmark or evidence bytes to an OCR cloud. The three generated
+fixtures validate the local integration only; they are not a production-quality
+accuracy claim.
 
 ## Current API
 
@@ -212,3 +226,6 @@ verification. See [Milestone 10](docs/MILESTONE_10_OPERATOR_AUTH.md) for named
 operators, case ownership, atomic webhook-case claiming, and Auth-aware RLS.
 See [Milestone 11](docs/MILESTONE_11_EVIDENCE_EXTRACTION.md) for typed extraction
 proposals, the human-confirmation boundary, and the frozen synthetic benchmark.
+See [Milestone 12](docs/MILESTONE_12_LOCAL_OCR.md) for local PP-OCRv6 extraction,
+page-and-box citations, the cloud-ready provider boundary, and the synthetic scan
+benchmark.
