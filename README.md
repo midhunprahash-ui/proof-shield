@@ -107,6 +107,17 @@ the same user ID and normalized email to `proofshield_operators`. The browser
 uses the publishable key to sign in, while the backend keeps the Supabase secret
 key server-only. See [Milestone 10](docs/MILESTONE_10_OPERATOR_AUTH.md).
 
+Milestone 16 provides a guarded, idempotent onboarding command. It reads the
+operator email, password and display name only from process environment values,
+never from command-line arguments, and verifies both sign-in and the active
+operator gate before reporting success:
+
+```bash
+PYTHONPATH=src python scripts/onboard_operator.py \
+  --confirm-live-write \
+  --project-ref qoujhmqkjicvcwoiyqkp
+```
+
 The foundation migration is [`supabase/migrations/20260823160507_proofshield_supabase_foundation.sql`](supabase/migrations/20260823160507_proofshield_supabase_foundation.sql).
 It is active on project `qoujhmqkjicvcwoiyqkp`.
 
@@ -254,3 +265,5 @@ gates, stale-approval refusal, and consistency reports inside evidence packets.
 See [Milestone 15](docs/MILESTONE_15_EVIDENCE_RESOLUTION.md) for append-only
 evidence corrections, stale-draft invalidation, packet version 3, and the gated
 Supabase activation order.
+See [Milestone 16](docs/MILESTONE_16_OPERATOR_ONBOARDING.md) for guarded live
+operator provisioning and the end-to-end demonstration checklist.

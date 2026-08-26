@@ -111,6 +111,20 @@ Git. The local live-demo runner may receive operator email/password through
 process-only `PROOFSHIELD_DEMO_OPERATOR_EMAIL` and
 `PROOFSHIELD_DEMO_OPERATOR_PASSWORD` variables.
 
+The preferred local workflow is the guarded onboarding runner, which also
+requires `PROOFSHIELD_DEMO_OPERATOR_DISPLAY_NAME` and verifies the resulting
+Supabase Auth session plus active registry identity:
+
+```bash
+PYTHONPATH=src python scripts/onboard_operator.py \
+  --confirm-live-write \
+  --project-ref qoujhmqkjicvcwoiyqkp
+```
+
+The command is safe to retry for the exact same active operator. It refuses a
+wrong password, a conflicting email or display name, or an inactive registry
+row. It never prints or stores the password.
+
 ## Deployment boundary
 
 Supabase is the only cloud platform in the current architecture. The API and
