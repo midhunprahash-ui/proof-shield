@@ -104,8 +104,7 @@ TypeScript checking, and the Bun production bundle. A live read-only Supabase
 query confirmed every current evidence row stores `document_json` as a JSON
 object; no remote data or schema was changed.
 
-## Next step
+## Next step completed
 
-A future milestone can add an explicit operator resolution workflow for
-superseded or incorrect evidence without mutating the append-only source history.
-That design needs a clear audit model before any database change is made.
+[Milestone 15](MILESTONE_15_EVIDENCE_RESOLUTION.md) adds the explicit operator
+resolution workflow while preserving the append-only source history.

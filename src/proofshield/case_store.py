@@ -12,6 +12,7 @@ from pydantic import AwareDatetime, BaseModel
 
 from proofshield.domain import Assessment, DisputeCase, EvidenceDocument
 from proofshield.drafting import ResponseDraft
+from proofshield.resolution import EvidenceResolution
 from proofshield.reviewing import DraftReview
 
 
@@ -28,6 +29,10 @@ class CaseConflictError(CaseStoreError):
 
 
 class EvidenceConflictError(CaseStoreError):
+    pass
+
+
+class EvidenceResolutionConflictError(CaseStoreError):
     pass
 
 
@@ -52,6 +57,7 @@ class CaseHistoryAction(StrEnum):
     CASE_CLAIMED = "CASE_CLAIMED"
     FILE_UPLOADED = "FILE_UPLOADED"
     EVIDENCE_ADDED = "EVIDENCE_ADDED"
+    EVIDENCE_RESOLVED = "EVIDENCE_RESOLVED"
     ASSESSED = "ASSESSED"
     DRAFT_CREATED = "DRAFT_CREATED"
     DRAFT_APPROVED = "DRAFT_APPROVED"
@@ -131,6 +137,16 @@ class CaseRepository(Protocol):
     def list_evidence_files(self, dispute_id: str) -> list[EvidenceFileMetadata]: ...
 
     def add_evidence(self, dispute_id: str, document: EvidenceDocument) -> bool: ...
+
+    def save_evidence_resolution(self, resolution: EvidenceResolution) -> bool: ...
+
+    def get_evidence_resolution(
+        self, dispute_id: str, evidence_id: str
+    ) -> EvidenceResolution: ...
+
+    def list_evidence_resolutions(
+        self, dispute_id: str
+    ) -> list[EvidenceResolution]: ...
 
     def record_assessment(self, assessment: Assessment) -> None: ...
 
@@ -398,6 +414,80 @@ class SupabaseCaseRepository:
                 f"evidence ID {document.evidence_id} is already attached elsewhere"
             )
         raise CaseStoreError(f"unexpected add-evidence status: {result}")
+
+    def save_evidence_resolution(self, resolution: EvidenceResolution) -> bool:
+        result = _rpc_status(
+            self.client,
+            "proofshield_resolve_evidence",
+            {
+                "p_dispute_id": resolution.dispute_id,
+                "p_evidence_id": resolution.evidence_id,
+                "p_resolution_id": resolution.resolution_id,
+                "p_action": str(resolution.action),
+                "p_replacement_evidence_id": resolution.replacement_evidence_id,
+                "p_reason": resolution.reason,
+                "p_resolved_by": str(resolution.resolved_by),
+                "p_request_sha256": resolution.request_sha256,
+                "p_resolution_json": resolution.model_dump(mode="json"),
+                "p_created_at": resolution.created_at.isoformat(),
+            },
+        )
+        if result == "CREATED":
+            return True
+        if result == "EXISTS":
+            return False
+        if result in {"CASE_NOT_FOUND", "EVIDENCE_NOT_FOUND"}:
+            raise CaseNotFoundError(
+                f"evidence {resolution.evidence_id} was not found for this case"
+            )
+        if result in {
+            "CONFLICT",
+            "REJECTED",
+            "REPLACEMENT_NOT_FOUND",
+            "REPLACEMENT_RESOLVED",
+            "TARGET_IS_REPLACEMENT",
+            "TYPE_MISMATCH",
+        }:
+            raise EvidenceResolutionConflictError(
+                f"evidence resolution was rejected: {result.lower()}"
+            )
+        raise CaseStoreError(f"unexpected evidence-resolution status: {result}")
+
+    def get_evidence_resolution(
+        self, dispute_id: str, evidence_id: str
+    ) -> EvidenceResolution:
+        rows = (
+            self.client.table("proofshield_evidence_resolutions")
+            .select("resolution_json")
+            .eq("dispute_id", dispute_id)
+            .eq("evidence_id", evidence_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            raise CaseNotFoundError(
+                f"evidence {evidence_id} has no resolution for case {dispute_id}"
+            )
+        return EvidenceResolution.model_validate(rows[0]["resolution_json"])
+
+    def list_evidence_resolutions(
+        self, dispute_id: str
+    ) -> list[EvidenceResolution]:
+        self._require_case(dispute_id)
+        rows = (
+            self.client.table("proofshield_evidence_resolutions")
+            .select("resolution_json")
+            .eq("dispute_id", dispute_id)
+            .order("created_at")
+            .order("resolution_id")
+            .execute()
+            .data
+        )
+        return [
+            EvidenceResolution.model_validate(row["resolution_json"])
+            for row in rows
+        ]
 
     def record_assessment(self, assessment: Assessment) -> None:
         result = _rpc_status(

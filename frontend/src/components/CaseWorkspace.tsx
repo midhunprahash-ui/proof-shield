@@ -113,6 +113,7 @@ export function CaseWorkspace({
           caseData={data.case}
           consistency={data.consistency}
           files={data.files}
+          resolutions={data.resolutions}
           notify={notify}
           onChanged={onRefresh}
         />

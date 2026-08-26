@@ -392,6 +392,17 @@ code {
 .evidence-record strong, .source-file strong { overflow: hidden; color: #2a374d; font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
 .evidence-record > div span { color: #8792a3; font-size: 0.64rem; }
 .evidence-record code { color: #7c8799; }
+.evidence-record-resolved { background: #f5f6f8; opacity: 0.72; }
+.evidence-record-resolved strong { text-decoration: line-through; }
+.resolution-card { border-color: #ecd9c0; background: #fffdf9; }
+.resolution-form { margin-top: 18px; }
+.resolution-list { display: flex; flex-direction: column; gap: 9px; margin-top: 16px; }
+.resolution-list article { display: grid; grid-template-columns: 32px 1fr; gap: 10px; padding: 11px; border: 1px solid #eadfce; border-radius: 9px; background: #fff; }
+.resolution-list article > span { display: grid; width: 28px; height: 28px; place-items: center; color: #a76520; background: #fff2df; border-radius: 7px; }
+.resolution-list article > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.resolution-list strong { color: #2a374d; font-size: 0.72rem; }
+.resolution-list small { color: #8792a3; font-size: 0.64rem; }
+.resolution-list p { margin: 2px 0 0; color: #586579; font-size: 0.68rem; }
 .source-file { display: flex; align-items: center; gap: 9px; padding: 8px 0; border-bottom: 1px solid #edf0f4; }
 .source-file > span { display: grid; flex: 0 0 31px; height: 31px; place-items: center; color: #526681; background: #f0f3f7; border-radius: 8px; }
 .source-file > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }

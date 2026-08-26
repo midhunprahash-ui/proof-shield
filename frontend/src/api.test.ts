@@ -10,7 +10,7 @@ function jsonResponse(value: unknown, status = 200): Response {
 }
 
 describe("ProofShieldApi", () => {
-  test("loads the five case workspace resources in parallel", async () => {
+  test("loads the six case workspace resources in parallel", async () => {
     const requested: string[] = [];
     const fetcher = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -19,6 +19,7 @@ describe("ProofShieldApi", () => {
         return jsonResponse({ dispute_id: "dp_123", status: "INCOMPLETE" });
       }
       if (url.endsWith("/files")) return jsonResponse([]);
+      if (url.endsWith("/resolutions")) return jsonResponse([]);
       if (url.endsWith("/drafts")) return jsonResponse([]);
       if (url.endsWith("/history")) return jsonResponse([]);
       return jsonResponse({ dispute_id: "dp_123" });
@@ -29,16 +30,43 @@ describe("ProofShieldApi", () => {
 
     expect(workspace.case.dispute_id).toBe("dp_123");
     expect(workspace.consistency.status).toBe("INCOMPLETE");
-    expect(requested).toHaveLength(5);
+    expect(workspace.resolutions).toEqual([]);
+    expect(requested).toHaveLength(6);
     expect(new Set(requested)).toEqual(
       new Set([
         "http://api.local/v1/cases/dp_123",
         "http://api.local/v1/cases/dp_123/consistency",
         "http://api.local/v1/cases/dp_123/files",
+        "http://api.local/v1/cases/dp_123/resolutions",
         "http://api.local/v1/cases/dp_123/drafts",
         "http://api.local/v1/cases/dp_123/history",
       ]),
     );
+  });
+
+  test("records a resolution without sending caller-controlled identity", async () => {
+    let requestedUrl = "";
+    let requestedBody = "";
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedBody = String(init?.body ?? "");
+      return jsonResponse({ resolution_id: "resolution_1" }, 201);
+    }) as typeof fetch;
+    const api = new ProofShieldApi("http://api.local", fetcher, () => "token");
+
+    await api.resolveEvidence("dp_1", {
+      evidence_id: "invoice_bad",
+      action: "EXCLUDED_INCORRECT",
+      reason: "Checked against the original order and found it was unrelated.",
+    });
+
+    expect(requestedUrl).toBe("http://api.local/v1/cases/dp_1/resolutions");
+    expect(JSON.parse(requestedBody)).toEqual({
+      evidence_id: "invoice_bad",
+      action: "EXCLUDED_INCORRECT",
+      reason: "Checked against the original order and found it was unrelated.",
+    });
+    expect(requestedBody.includes("resolved_by")).toBe(false);
   });
 
   test("sends the Supabase bearer token and not a reviewer identity in the body", async () => {

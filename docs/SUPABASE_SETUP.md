@@ -4,19 +4,13 @@
 
 ProofShield uses Supabase project `qoujhmqkjicvcwoiyqkp`.
 
-The Codex connection is named `supabase-proofshield` because this computer
+The MCP connection is named `supabase-proofshield` because this computer
 already had a `supabase` MCP connection for a different project. Keeping both
 names prevents an accidental schema change in the unrelated project.
 
-The configured command is:
-
-```bash
-codex mcp add supabase-proofshield --url 'https://mcp.supabase.com/mcp?project_ref=qoujhmqkjicvcwoiyqkp&features=docs%2Caccount%2Cdatabase%2Cdebugging%2Cdevelopment%2Cfunctions%2Cbranching'
-codex mcp login supabase-proofshield
-```
-
-Run `/mcp` in a new Codex task and confirm `supabase-proofshield` is enabled.
-MCP servers added during an existing task load on the next task/session.
+In the development client's MCP settings, confirm `supabase-proofshield` is
+authenticated and its URL contains the exact project reference above. MCP
+servers added during an existing task may load only in the next task/session.
 
 ## Applied repository migrations
 

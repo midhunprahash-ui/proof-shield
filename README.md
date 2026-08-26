@@ -49,6 +49,13 @@ acknowledgements. The report never decides the chargeback, but deterministic
 conflicts and unverified sources now block response drafting until they are
 resolved and reassessed.
 
+An authenticated case owner can now resolve an incorrect record without editing
+or deleting it. The operator chooses exclusion or a same-type replacement,
+records a mandatory reason, and confirms the permanent action. Future checks and
+drafts ignore the resolved record, while the original evidence remains visible
+in the case and audit trail. Any earlier draft becomes stale. Approved packet
+version 3 exports include the immutable resolution audit and its manifest hash.
+
 ## Why this architecture
 
 The project intentionally separates two jobs:
@@ -173,6 +180,8 @@ accuracy claim.
 - `GET /v1/cases/{dispute_id}/files`
 - `POST /v1/cases/{dispute_id}/files/{file_id}/extract`
 - `POST /v1/cases/{dispute_id}/evidence`
+- `GET /v1/cases/{dispute_id}/resolutions`
+- `POST /v1/cases/{dispute_id}/resolutions`
 - `POST /v1/cases/{dispute_id}/assessment`
 - `POST /v1/cases/{dispute_id}/drafts`
 - `GET /v1/cases/{dispute_id}/drafts`
@@ -242,3 +251,6 @@ cross-source comparisons, named conflicts and missing facts, and the advisory
 operator review boundary.
 See [Milestone 14](docs/MILESTONE_14_CONSISTENCY_GATE.md) for all-source drafting
 gates, stale-approval refusal, and consistency reports inside evidence packets.
+See [Milestone 15](docs/MILESTONE_15_EVIDENCE_RESOLUTION.md) for append-only
+evidence corrections, stale-draft invalidation, packet version 3, and the gated
+Supabase activation order.

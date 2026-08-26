@@ -34,6 +34,7 @@ from proofshield.case_store import (
     DraftNotFoundError,
     EvidenceConflictError,
     EvidenceFileMetadata,
+    EvidenceResolutionConflictError,
     ReviewConflictError,
     ReviewNotFoundError,
     new_file_id,
@@ -76,6 +77,12 @@ from proofshield.operator_auth import (
     PublicAuthConfig,
 )
 from proofshield.packet import EvidencePacketError, build_evidence_packet
+from proofshield.resolution import (
+    EvidenceResolution,
+    EvidenceResolutionError,
+    EvidenceResolutionRequest,
+    create_evidence_resolution,
+)
 from proofshield.reviewing import (
     DraftReview,
     DraftReviewRequest,
@@ -390,7 +397,10 @@ def create_app(
     ) -> EvidenceConsistencyReport:
         try:
             require_owned_case(dispute_id, operator)
-            return consistency_analyzer.analyze(cases().get_case(dispute_id))
+            return consistency_analyzer.analyze(
+                cases().get_case(dispute_id),
+                cases().list_evidence_resolutions(dispute_id),
+            )
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -570,6 +580,62 @@ def create_app(
             )
         return document
 
+    @application.get(
+        "/v1/cases/{dispute_id}/resolutions",
+        response_model=list[EvidenceResolution],
+    )
+    def list_case_evidence_resolutions(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> list[EvidenceResolution]:
+        try:
+            require_owned_case(dispute_id, operator)
+            return cases().list_evidence_resolutions(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.post(
+        "/v1/cases/{dispute_id}/resolutions",
+        response_model=EvidenceResolution,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def resolve_case_evidence(
+        dispute_id: str,
+        request: EvidenceResolutionRequest,
+        response: Response,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> EvidenceResolution:
+        try:
+            require_owned_case(dispute_id, operator)
+            case = cases().get_case(dispute_id)
+            existing = cases().list_evidence_resolutions(dispute_id)
+            resolution = create_evidence_resolution(
+                case,
+                existing,
+                request,
+                resolved_by=operator.user_id,
+            )
+            created = cases().save_evidence_resolution(resolution)
+            stored = cases().get_evidence_resolution(
+                dispute_id, resolution.evidence_id
+            )
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except (EvidenceResolutionError, EvidenceResolutionConflictError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return stored
+
     @application.post(
         "/v1/cases/{dispute_id}/assessment",
         response_model=Assessment,
@@ -581,7 +647,8 @@ def create_app(
         try:
             require_owned_case(dispute_id, operator)
             case = cases().get_case(dispute_id)
-            assessment = assessor.assess(case)
+            resolutions = cases().list_evidence_resolutions(dispute_id)
+            assessment = assessor.assess(case, resolutions)
             cases().record_assessment(assessment)
             return assessment
         except CaseNotFoundError as error:
@@ -603,8 +670,10 @@ def create_app(
         try:
             require_owned_case(dispute_id, operator)
             case = cases().get_case(dispute_id)
-            assessment = assessor.assess(case)
-            draft = draft_generator.generate(case, assessment)
+            resolutions = cases().list_evidence_resolutions(dispute_id)
+            consistency = consistency_analyzer.analyze(case, resolutions)
+            assessment = assessor.assess(case, resolutions)
+            draft = draft_generator.generate(case, assessment, consistency)
             created = cases().save_draft(draft)
             stored = cases().get_draft(dispute_id, draft.draft_id)
         except CaseNotFoundError as error:
@@ -683,8 +752,9 @@ def create_app(
             draft = cases().get_draft(dispute_id, draft_id)
             if request.decision == ReviewDecision.APPROVED:
                 case = cases().get_case(dispute_id)
-                consistency = consistency_analyzer.analyze(case)
-                current_assessment = assessor.assess(case)
+                resolutions = cases().list_evidence_resolutions(dispute_id)
+                consistency = consistency_analyzer.analyze(case, resolutions)
+                current_assessment = assessor.assess(case, resolutions)
                 draft_generator.require_current(
                     case,
                     draft,
@@ -756,8 +826,9 @@ def create_app(
             case = cases().get_case(dispute_id)
             draft = cases().get_draft(dispute_id, draft_id)
             review = cases().get_review(dispute_id, draft_id)
-            consistency = consistency_analyzer.analyze(case)
-            current_assessment = assessor.assess(case)
+            resolutions = cases().list_evidence_resolutions(dispute_id)
+            consistency = consistency_analyzer.analyze(case, resolutions)
+            current_assessment = assessor.assess(case, resolutions)
             draft_generator.require_current(
                 case,
                 draft,
@@ -776,6 +847,7 @@ def create_app(
                 review,
                 source_files,
                 consistency,
+                resolutions,
             )
         except (CaseNotFoundError, DraftNotFoundError) as error:
             raise HTTPException(

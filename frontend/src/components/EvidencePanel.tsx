@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { ProofShieldApi } from "../api";
 import { evidenceTypeLabel, formatBytes, formatDateTime, shortId } from "../lib/format";
@@ -7,10 +7,12 @@ import type {
   EvidenceConsistencyReport,
   EvidenceExtractionProposal,
   EvidenceFileMetadata,
+  EvidenceResolution,
   EvidenceSubmission,
   EvidenceType,
 } from "../types";
 import { Icon } from "./Icon";
+import { EvidenceResolutionPanel } from "./EvidenceResolutionPanel";
 import { StatusBadge } from "./StatusBadge";
 
 const CONSISTENCY_STATUS = {
@@ -39,6 +41,7 @@ export function EvidencePanel({
   caseData,
   consistency,
   files,
+  resolutions,
   notify,
   onChanged,
 }: {
@@ -46,6 +49,7 @@ export function EvidencePanel({
   caseData: DisputeCase;
   consistency: EvidenceConsistencyReport;
   files: EvidenceFileMetadata[];
+  resolutions: EvidenceResolution[];
   notify: (message: string, tone?: "danger" | "good") => void;
   onChanged: () => Promise<void>;
 }) {
@@ -62,6 +66,10 @@ export function EvidencePanel({
   const [deliveryStatus, setDeliveryStatus] = useState("delivered");
   const [customerAcknowledged, setCustomerAcknowledged] = useState(false);
   const [text, setText] = useState("");
+  const resolutionByEvidenceId = useMemo(
+    () => new Map(resolutions.map((resolution) => [resolution.evidence_id, resolution])),
+    [resolutions],
+  );
 
   async function uploadFile(file: File | undefined) {
     if (!file) return;
@@ -179,14 +187,25 @@ export function EvidencePanel({
           ) : (
             <div className="evidence-record-list">
               {caseData.evidence.map((evidence) => (
-                <article className="evidence-record" key={evidence.evidence_id}>
+                <article
+                  className={resolutionByEvidenceId.has(evidence.evidence_id)
+                    ? "evidence-record evidence-record-resolved"
+                    : "evidence-record"}
+                  key={evidence.evidence_id}
+                >
                   <span className="file-kind"><Icon name="file" size={18} /></span>
                   <div>
                     <strong>{evidenceTypeLabel(evidence.evidence_type)}</strong>
                     <span>{evidence.source_name ?? shortId(evidence.evidence_id)}</span>
                   </div>
-                  <StatusBadge tone={evidence.source_verified ? "good" : "warning"}>
-                    {evidence.source_verified ? "Verified" : "Unverified"}
+                  <StatusBadge
+                    tone={resolutionByEvidenceId.has(evidence.evidence_id)
+                      ? "muted"
+                      : evidence.source_verified ? "good" : "warning"}
+                  >
+                    {resolutionByEvidenceId.has(evidence.evidence_id)
+                      ? "Resolved"
+                      : evidence.source_verified ? "Verified" : "Unverified"}
                   </StatusBadge>
                   <code>{evidence.source_sha256 ? shortId(evidence.source_sha256, 6) : "No hash"}</code>
                 </article>
@@ -217,6 +236,14 @@ export function EvidencePanel({
           </div>
         </article>
       </section>
+
+      <EvidenceResolutionPanel
+        api={api}
+        caseData={caseData}
+        notify={notify}
+        onChanged={onChanged}
+        resolutions={resolutions}
+      />
 
       <section className="workspace-grid composer-grid">
         <article className="detail-card">

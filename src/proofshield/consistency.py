@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -10,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from proofshield.domain import DisputeCase, EvidenceDocument, EvidenceType
+from proofshield.resolution import EvidenceResolution
 
 
 class ConsistencyStatus(StrEnum):
@@ -86,6 +88,9 @@ class EvidenceConsistencyReport(BaseModel):
     conflict_count: int = Field(ge=0)
     missing_count: int = Field(ge=0)
     unverified_count: int = Field(ge=0)
+    resolution_count: int = Field(ge=0)
+    excluded_evidence_ids: list[str]
+    active_evidence_ids: list[str]
     advisory_only: Literal[True] = True
     human_review_required: Literal[True] = True
 
@@ -107,9 +112,22 @@ class EvidenceConsistencyAnalyzer:
         (EvidenceType.CUSTOMER_COMMUNICATION, False),
     )
 
-    def analyze(self, case: DisputeCase) -> EvidenceConsistencyReport:
+    def analyze(
+        self,
+        case: DisputeCase,
+        resolutions: Iterable[EvidenceResolution] = (),
+    ) -> EvidenceConsistencyReport:
+        resolution_list = list(resolutions)
+        if any(item.dispute_id != case.dispute_id for item in resolution_list):
+            raise ValueError("every resolution must belong to the analyzed case")
+        excluded_ids = {item.evidence_id for item in resolution_list}
+        active_evidence = [
+            document
+            for document in case.evidence
+            if document.evidence_id not in excluded_ids
+        ]
         requirements = [
-            self._requirement(case.evidence, evidence_type, required=required)
+            self._requirement(active_evidence, evidence_type, required=required)
             for evidence_type, required in self._requirements
         ]
         rules = (
@@ -149,7 +167,7 @@ class EvidenceConsistencyAnalyzer:
         facts = [
             comparison
             for rule in rules
-            if (comparison := self._compare_fact(case.evidence, rule)) is not None
+            if (comparison := self._compare_fact(active_evidence, rule)) is not None
         ]
 
         conflict_count = sum(fact.outcome == FactOutcome.CONFLICT for fact in facts)
@@ -159,7 +177,7 @@ class EvidenceConsistencyAnalyzer:
         ) + sum(fact.outcome == FactOutcome.MISSING for fact in facts)
         unverified_ids = {
             document.evidence_id
-            for document in case.evidence
+            for document in active_evidence
             if not document.source_verified
         }
         status = self._status(
@@ -176,6 +194,11 @@ class EvidenceConsistencyAnalyzer:
             conflict_count=conflict_count,
             missing_count=missing_count,
             unverified_count=len(unverified_ids),
+            resolution_count=len(resolution_list),
+            excluded_evidence_ids=sorted(excluded_ids),
+            active_evidence_ids=sorted(
+                document.evidence_id for document in active_evidence
+            ),
         )
 
     @staticmethod

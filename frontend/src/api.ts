@@ -9,6 +9,8 @@ import type {
   EvidenceDocument,
   EvidenceExtractionProposal,
   EvidenceFileMetadata,
+  EvidenceResolution,
+  EvidenceResolutionInput,
   EvidenceSubmission,
   OperatorIdentity,
   ResponseDraft,
@@ -76,14 +78,15 @@ export class ProofShieldApi {
   ): Promise<CaseWorkspaceData> {
     const path = `/v1/cases/${encodeURIComponent(disputeId)}`;
     const requestOptions = signal ? { signal } : {};
-    const [caseData, consistency, files, drafts, history] = await Promise.all([
+    const [caseData, consistency, files, resolutions, drafts, history] = await Promise.all([
       this.request<DisputeCase>(path, requestOptions),
       this.request<EvidenceConsistencyReport>(`${path}/consistency`, requestOptions),
       this.request<EvidenceFileMetadata[]>(`${path}/files`, requestOptions),
+      this.request<EvidenceResolution[]>(`${path}/resolutions`, requestOptions),
       this.request<ResponseDraft[]>(`${path}/drafts`, requestOptions),
       this.request<CaseHistoryEntry[]>(`${path}/history`, requestOptions),
     ]);
-    return { case: caseData, consistency, files, drafts, history };
+    return { case: caseData, consistency, files, resolutions, drafts, history };
   }
 
   assess(disputeId: string): Promise<Assessment> {
@@ -171,6 +174,20 @@ export class ProofShieldApi {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(submission),
+      },
+    );
+  }
+
+  resolveEvidence(
+    disputeId: string,
+    input: EvidenceResolutionInput,
+  ): Promise<EvidenceResolution> {
+    return this.request<EvidenceResolution>(
+      `/v1/cases/${encodeURIComponent(disputeId)}/resolutions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
       },
     );
   }

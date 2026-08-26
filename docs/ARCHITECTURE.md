@@ -117,6 +117,13 @@ Human reviews, edits and explicitly confirms structured facts
 Evidence ID + source file linked to exactly one dispute
        |
        v
+Append-only evidence resolution when needed
+  - original record and file remain visible
+  - incorrect records are excluded from future checks
+  - superseded records require a same-type replacement
+  - verified operator identity and reason are retained
+       |
+       v
 Deterministic reassessment
        |
        v
@@ -198,10 +205,11 @@ deterministic ZIP whose cited Storage objects are re-hashed before inclusion.
 The caller cannot supply the reviewer label; the backend stamps the verified
 Auth user ID and registry-controlled display name.
 
-Packet export re-runs consistency and assessment against the current append-only
-evidence set. Any evidence added after drafting changes the deterministic input
-fingerprint and invalidates the old approval. Version 2 packets include a hashed
-`consistency-report.json` whose digest is sealed into the manifest.
+Packet export re-runs consistency and assessment against the current active
+evidence set. Any evidence addition or resolution after drafting changes the
+deterministic input fingerprint and invalidates the old approval. Version 3
+packets include hashed `consistency-report.json` and
+`evidence-resolutions.json` files whose digests are sealed into the manifest.
 
 ## Current frontend boundary
 
@@ -219,7 +227,8 @@ Supabase Postgres + private Storage
 ```
 
 The browser can sign in, claim an unassigned webhook case, list only owned
-cases, upload a reviewed source, add structured evidence,
+cases, upload a reviewed source, add structured evidence, record an immutable
+evidence resolution,
 run the verifier, create a cited draft, record one protected human decision,
 download an approved packet, and view case history. It cannot access Supabase
 tables or Storage directly and it cannot submit a response to Razorpay.

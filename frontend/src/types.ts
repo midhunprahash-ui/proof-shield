@@ -9,6 +9,7 @@ export type EvidenceType =
   | "CUSTOMER_COMMUNICATION";
 
 export type ReviewDecision = "APPROVED" | "REJECTED";
+export type EvidenceResolutionAction = "EXCLUDED_INCORRECT" | "SUPERSEDED";
 
 export interface CaseSummary {
   dispute_id: string;
@@ -67,6 +68,25 @@ export interface EvidenceFileMetadata {
   size_bytes: number;
   sha256: string;
   created_at: string;
+}
+
+export interface EvidenceResolution {
+  resolution_id: string;
+  dispute_id: string;
+  evidence_id: string;
+  action: EvidenceResolutionAction;
+  replacement_evidence_id: string | null;
+  reason: string;
+  resolved_by: string;
+  request_sha256: string;
+  created_at: string;
+}
+
+export interface EvidenceResolutionInput {
+  evidence_id: string;
+  action: EvidenceResolutionAction;
+  replacement_evidence_id?: string;
+  reason: string;
 }
 
 export interface VerificationCheck {
@@ -141,6 +161,7 @@ export interface CaseHistoryEntry {
     | "CASE_CLAIMED"
     | "FILE_UPLOADED"
     | "EVIDENCE_ADDED"
+    | "EVIDENCE_RESOLVED"
     | "ASSESSED"
     | "DRAFT_CREATED"
     | "DRAFT_APPROVED"
@@ -206,6 +227,9 @@ export interface EvidenceConsistencyReport {
   conflict_count: number;
   missing_count: number;
   unverified_count: number;
+  resolution_count: number;
+  excluded_evidence_ids: string[];
+  active_evidence_ids: string[];
   advisory_only: true;
   human_review_required: true;
 }
@@ -214,6 +238,7 @@ export interface CaseWorkspaceData {
   case: DisputeCase;
   consistency: EvidenceConsistencyReport;
   files: EvidenceFileMetadata[];
+  resolutions: EvidenceResolution[];
   drafts: ResponseDraft[];
   history: CaseHistoryEntry[];
 }
