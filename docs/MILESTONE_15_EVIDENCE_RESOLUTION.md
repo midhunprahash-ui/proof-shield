@@ -98,34 +98,46 @@ explicit confirmation before enabling the permanent action.
 - the service-only `proofshield_resolve_evidence` RPC;
 - the `EVIDENCE_RESOLVED` history action.
 
+`supabase/migrations/20260826110406_evidence_resolution_fk_indexes.sql` adds
+covering indexes for both composite source/replacement foreign keys after the
+Supabase performance advisor identified them.
+
 ### Risk summary
 
-The migration is additive and does not rewrite existing evidence. Its main risk
-is activation order: the live project does not yet contain the Milestone 10
-operator registry, ownership columns, private ownership helper or policies.
-This migration references those objects and must not be applied first.
+The migrations are additive and do not rewrite existing evidence. Activation
+followed the required order because evidence resolutions depend on the operator
+registry, ownership columns, private ownership helper, and policies.
 
-### Recommended activation order
+### Completed activation order
 
-1. explicitly approve live schema activation;
-2. apply `20260826080225_operator_auth_and_ownership.sql`;
-3. provision a confirmed Auth user and matching active operator registry row;
-4. verify existing unassigned cases can be claimed safely;
-5. apply `20260826104022_evidence_resolution.sql`;
-6. verify table RLS, grants, policies, function privileges and indexes;
-7. run security and performance advisors again;
-8. exercise one non-writing `CASE_NOT_FOUND` RPC call, then run the guarded
-   end-to-end operator flow with explicitly approved synthetic data.
+1. explicit live-project approval was received;
+2. `20260826080225_operator_auth_and_ownership.sql` was applied;
+3. `20260826104022_evidence_resolution.sql` was applied;
+4. RLS, grants, policies, function privileges and indexes were verified;
+5. a no-write `CASE_NOT_FOUND` RPC probe preserved resolution/history counts;
+6. the advisor-driven composite foreign-key indexes were applied;
+7. security and performance advisors were rerun.
 
 If either migration fails, stop local API use and fix forward. Do not drop
 ownership, reviewer or resolution records after they contain audit data.
 
 ## Current remote status
 
-No live DDL was applied in this milestone. A read-only MCP inspection confirmed
-that the remote project still has the four older migration records and no
-`proofshield_operators` or `proofshield_evidence_resolutions` table. This matches
-the Milestone 10 activation warning and preserves the explicit-approval boundary.
+Live project `qoujhmqkjicvcwoiyqkp` records:
+
+- `20260826110215 operator_auth_and_ownership`;
+- `20260826110253 evidence_resolution`;
+- `20260826110442 evidence_resolution_fk_indexes`.
+
+`proofshield_operators` and `proofshield_evidence_resolutions` both have RLS
+enabled. Authenticated users have owner-scoped `SELECT` only; they cannot insert
+resolution rows or execute the resolution RPC. The service role can insert and
+execute the RPC. Existing counts remained one case, two evidence rows, one
+review, eight history entries, and zero resolutions.
+
+The security advisor now reports only the two intentional no-policy notices for
+backend-only webhook tables. The missing-foreign-key-index notices are cleared.
+Unused-index notices are expected while the live dataset remains nearly empty.
 
 ## Verification coverage
 

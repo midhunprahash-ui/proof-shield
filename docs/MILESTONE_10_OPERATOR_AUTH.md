@@ -52,13 +52,14 @@ multi-tenancy can be added before onboarding multiple merchants.
 Authenticated users receive `SELECT` only. All browser writes and all public
 RPC execution remain revoked.
 
-## Risk summary
+## Live activation
 
-The remote project still records only the four Milestone 4-9 migrations. It has
-one labelled synthetic demonstration case and zero Auth users. The Milestone 10
-migration has not been applied because remote DDL requires explicit approval.
-When applied, the existing case will remain safe and unassigned until a named
-operator claims it; no synthetic or customer row is deleted.
+The migration was applied to project `qoujhmqkjicvcwoiyqkp` on 2026-08-26 after
+explicit approval. Supabase recorded it as remote migration `20260826110215`.
+The existing labelled synthetic demonstration case remained unassigned, the
+existing legacy review retained its nullable reviewer ID, and no row was deleted.
+The operator registry currently contains zero rows until a confirmed Auth user
+is deliberately provisioned.
 
 ## Why this is safer
 
@@ -80,16 +81,12 @@ reassignment, and keeps database writes behind the trusted backend.
 - MCP OAuth was re-authenticated and the project URL was verified as
   `https://qoujhmqkjicvcwoiyqkp.supabase.co`.
 
-## Activation and validation steps
+## Remaining operator-onboarding steps
 
-1. explicitly approve the live schema change;
-2. apply the migration through `supabase-proofshield`;
-3. re-check tables, functions, grants, policies, and migration history;
-4. run Supabase security and performance advisors;
-5. create one confirmed Auth user and matching active operator row;
-6. run authorized, unauthorized, cross-owner, and claim-race checks with real
+1. create one confirmed Auth user and matching active operator row;
+2. run authorized, unauthorized, cross-owner, and claim-race checks with real
    Supabase access tokens;
-7. run the local React dashboard against the retained demo case.
+3. run the local React dashboard against the retained demo case.
 
 If activation fails, keep the local API stopped and fix forward from the
 migration error. Do not drop ownership or reviewer columns after they contain

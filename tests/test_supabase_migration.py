@@ -15,6 +15,9 @@ AUTH_MIGRATION = Path(
 RESOLUTION_MIGRATION = Path(
     "supabase/migrations/20260826104022_evidence_resolution.sql"
 )
+RESOLUTION_INDEX_MIGRATION = Path(
+    "supabase/migrations/20260826110406_evidence_resolution_fk_indexes.sql"
+)
 TABLES = {
     "proofshield_cases",
     "proofshield_evidence",
@@ -179,3 +182,13 @@ def test_resolution_rpc_is_service_only_and_database_validated() -> None:
     )
     statement_end = sql.index(";", revoke_position)
     assert "public, anon, authenticated" in sql[revoke_position:statement_end]
+
+
+def test_resolution_composite_foreign_keys_have_covering_indexes() -> None:
+    sql = RESOLUTION_INDEX_MIGRATION.read_text(encoding="utf-8")
+
+    assert "proofshield_evidence_resolutions_source_case_idx" in sql
+    assert "(evidence_id, dispute_id)" in sql
+    assert "proofshield_evidence_resolutions_replacement_case_idx" in sql
+    assert "replacement_evidence_id" in sql
+    assert "dispute_id" in sql
