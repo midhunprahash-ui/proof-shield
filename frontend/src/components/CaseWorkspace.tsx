@@ -8,7 +8,7 @@ import {
   formatMoney,
   shortId,
 } from "../lib/format";
-import type { Assessment, CaseWorkspaceData } from "../types";
+import type { Assessment, CaseWorkspaceData, OperatorIdentity } from "../types";
 import { AuditTimeline } from "./AuditTimeline";
 import { EvidencePanel } from "./EvidencePanel";
 import { Icon } from "./Icon";
@@ -30,16 +30,14 @@ export function CaseWorkspace({
   notify,
   onBack,
   onRefresh,
-  onRequestOperator,
-  operatorSecret,
+  operator,
 }: {
   api: ProofShieldApi;
   data: CaseWorkspaceData;
   notify: (message: string, tone?: "danger" | "good") => void;
   onBack: () => void;
   onRefresh: () => Promise<void>;
-  onRequestOperator: () => void;
-  operatorSecret: string;
+  operator: OperatorIdentity;
 }) {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("summary");
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -125,8 +123,7 @@ export function CaseWorkspace({
           drafts={data.drafts}
           notify={notify}
           onChanged={onRefresh}
-          onRequestOperator={onRequestOperator}
-          operatorSecret={operatorSecret}
+          operator={operator}
         />
       ) : null}
       {activeTab === "audit" ? <AuditTimeline history={data.history} /> : null}

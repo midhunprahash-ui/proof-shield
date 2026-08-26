@@ -10,6 +10,7 @@ from proofshield.memory import (
     InMemoryEvidenceFileStore,
 )
 from proofshield.synthetic import make_case
+from tests.auth_helpers import AUTH_HEADERS, TEST_AUTHENTICATOR
 
 
 def make_client(tmp_path) -> TestClient:
@@ -19,7 +20,9 @@ def make_client(tmp_path) -> TestClient:
             case_repository=InMemoryCaseRepository(),
             evidence_file_store=InMemoryEvidenceFileStore(),
             webhook_ledger=InMemoryEventLedger(),
-        )
+            operator_authenticator=TEST_AUTHENTICATOR,
+        ),
+        headers=AUTH_HEADERS,
     )
 
 

@@ -9,6 +9,9 @@ DRAFT_MIGRATION = Path(
 REVIEW_MIGRATION = Path(
     "supabase/migrations/20260824070552_draft_reviews_and_evidence_packets.sql"
 )
+AUTH_MIGRATION = Path(
+    "supabase/migrations/20260826080225_operator_auth_and_ownership.sql"
+)
 TABLES = {
     "proofshield_cases",
     "proofshield_evidence",
@@ -91,3 +94,50 @@ def test_draft_reviews_are_immutable_backend_only_decisions() -> None:
     assert "on conflict (draft_id) do nothing" in sql
     assert "security invoker" in sql
     assert "from public, anon, authenticated;" in sql
+
+
+def test_operator_auth_migration_uses_named_identity_and_owned_rows() -> None:
+    sql = AUTH_MIGRATION.read_text(encoding="utf-8")
+
+    assert "create table public.proofshield_operators" in sql
+    assert "user_id uuid primary key references auth.users(id)" in sql
+    assert "add column owner_id uuid" in sql
+    assert "add column reviewer_user_id uuid" in sql
+    assert "proofshield_cases_owner_updated_idx" in sql
+    assert "proofshield_draft_reviews_reviewer_user_idx" in sql
+    assert "to authenticated" in sql
+    assert "owner_id = (select auth.uid())" in sql
+    assert "reviewer_user_id" in sql
+    assert "CASE_CLAIMED" in sql
+    assert "proofshield_list_unassigned_cases" in sql
+    assert "proofshield_claim_case" in sql
+
+
+def test_operator_rls_helper_is_private_pinned_and_browser_read_only() -> None:
+    sql = AUTH_MIGRATION.read_text(encoding="utf-8")
+
+    assert "function private.proofshield_operator_owns_case" in sql
+    assert "security definer" in sql
+    assert "set search_path = ''" in sql
+    assert "revoke execute" in sql
+    assert "from public, anon;" in sql
+    assert "grant select on table public.proofshield_cases to authenticated;" in sql
+    assert "grant insert on table public.proofshield_cases to authenticated" not in sql
+    assert "grant update on table public.proofshield_cases to authenticated" not in sql
+    assert "grant delete on table public.proofshield_cases to authenticated" not in sql
+
+
+def test_operator_mutation_rpcs_remain_service_role_only() -> None:
+    sql = AUTH_MIGRATION.read_text(encoding="utf-8")
+
+    for signature in {
+        "proofshield_save_case(",
+        "proofshield_list_cases(uuid)",
+        "proofshield_list_unassigned_cases()",
+        "proofshield_claim_case(text, uuid)",
+        "proofshield_review_response_draft(",
+    }:
+        revoke_position = sql.index(f"revoke execute on function public.{signature}")
+        statement_end = sql.index(";", revoke_position)
+        statement = sql[revoke_position:statement_end]
+        assert "public, anon, authenticated" in statement

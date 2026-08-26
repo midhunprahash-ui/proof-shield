@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 
 import { ApiError, type ProofShieldApi } from "../api";
 import { decisionLabel, formatDateTime, shortId } from "../lib/format";
-import type { DraftReview, ResponseDraft, ReviewDecision } from "../types";
+import type {
+  DraftReview,
+  OperatorIdentity,
+  ResponseDraft,
+  ReviewDecision,
+} from "../types";
 import { Icon } from "./Icon";
 import { StatusBadge } from "./StatusBadge";
 
@@ -12,16 +17,14 @@ export function ResponsePanel({
   drafts,
   notify,
   onChanged,
-  onRequestOperator,
-  operatorSecret,
+  operator,
 }: {
   api: ProofShieldApi;
   disputeId: string;
   drafts: ResponseDraft[];
   notify: (message: string, tone?: "danger" | "good") => void;
   onChanged: () => Promise<void>;
-  onRequestOperator: () => void;
-  operatorSecret: string;
+  operator: OperatorIdentity;
 }) {
   const draft = drafts[0] ?? null;
   const [review, setReview] = useState<DraftReview | null>(null);
@@ -29,18 +32,17 @@ export function ResponsePanel({
   const [creating, setCreating] = useState(false);
   const [reviewing, setReviewing] = useState<ReviewDecision | null>(null);
   const [downloading, setDownloading] = useState(false);
-  const [reviewerLabel, setReviewerLabel] = useState("");
   const [note, setNote] = useState("");
 
   useEffect(() => {
-    if (!draft || !operatorSecret) {
+    if (!draft) {
       setReview(null);
       return;
     }
     const controller = new AbortController();
     setReviewLoading(true);
     api
-      .getReview(disputeId, draft.draft_id, operatorSecret, controller.signal)
+      .getReview(disputeId, draft.draft_id, controller.signal)
       .then((saved) => {
         if (!controller.signal.aborted) setReview(saved);
       })
@@ -56,7 +58,7 @@ export function ResponsePanel({
         if (!controller.signal.aborted) setReviewLoading(false);
       });
     return () => controller.abort();
-  }, [api, disputeId, draft, notify, operatorSecret]);
+  }, [api, disputeId, draft, notify]);
 
   async function createDraft() {
     setCreating(true);
@@ -73,14 +75,6 @@ export function ResponsePanel({
 
   async function decide(decision: ReviewDecision) {
     if (!draft) return;
-    if (!operatorSecret) {
-      onRequestOperator();
-      return;
-    }
-    if (!reviewerLabel.trim()) {
-      notify("Add a reviewer label before recording the decision.", "danger");
-      return;
-    }
     setReviewing(decision);
     try {
       const saved = await api.reviewDraft(
@@ -88,10 +82,8 @@ export function ResponsePanel({
         draft.draft_id,
         {
           decision,
-          reviewerLabel: reviewerLabel.trim(),
           ...(note.trim() ? { note: note.trim() } : {}),
         },
-        operatorSecret,
       );
       setReview(saved);
       notify(`Draft ${decision.toLowerCase()} and sealed in the audit record.`, "good");
@@ -104,13 +96,10 @@ export function ResponsePanel({
   }
 
   async function downloadPacket() {
-    if (!draft || !operatorSecret) {
-      onRequestOperator();
-      return;
-    }
+    if (!draft) return;
     setDownloading(true);
     try {
-      const packet = await api.downloadPacket(disputeId, draft.draft_id, operatorSecret);
+      const packet = await api.downloadPacket(disputeId, draft.draft_id);
       const url = URL.createObjectURL(packet.blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -220,42 +209,29 @@ export function ResponsePanel({
           </div>
         ) : (
           <div className="review-form">
-            {!operatorSecret ? (
-              <button className="access-banner" onClick={onRequestOperator} type="button">
-                <span><Icon name="lock" size={18} /></span>
-                <div>
-                  <strong>Operator access required</strong>
-                  <small>Unlock protected approval controls for this session.</small>
-                </div>
-                <Icon name="chevron" size={17} />
-              </button>
-            ) : null}
             <div className="form-grid">
-              <label>
-                Reviewer label
-                <input
-                  disabled={!operatorSecret}
-                  onChange={(event) => setReviewerLabel(event.target.value)}
-                  placeholder="e.g. Merchant risk lead"
-                  value={reviewerLabel}
-                />
-              </label>
               <label>
                 Decision note <span>(optional)</span>
                 <input
-                  disabled={!operatorSecret}
                   onChange={(event) => setNote(event.target.value)}
                   placeholder="Why is this response safe or unsafe?"
                   value={note}
                 />
               </label>
+              <div className="verified-reviewer">
+                <span><Icon name="check" size={16} /></span>
+                <div>
+                  <strong>{operator.display_name}</strong>
+                  <small>{operator.email} · verified by Supabase Auth</small>
+                </div>
+              </div>
             </div>
             <div className="review-actions">
               <p><Icon name="lock" size={15} /> A decision is permanent and append-only.</p>
               <div>
                 <button
                   className="secondary-button danger-button"
-                  disabled={reviewing !== null || !operatorSecret}
+                  disabled={reviewing !== null}
                   onClick={() => void decide("REJECTED")}
                   type="button"
                 >
@@ -263,7 +239,7 @@ export function ResponsePanel({
                 </button>
                 <button
                   className="primary-button"
-                  disabled={reviewing !== null || !operatorSecret}
+                  disabled={reviewing !== null}
                   onClick={() => void decide("APPROVED")}
                   type="button"
                 >

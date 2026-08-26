@@ -19,18 +19,7 @@ class DraftReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: ReviewDecision
-    reviewer_label: str = Field(min_length=1, max_length=200)
     note: str | None = Field(default=None, max_length=2_000)
-
-    @field_validator("reviewer_label")
-    @classmethod
-    def normalize_reviewer_label(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("reviewer_label must not be blank")
-        if not normalized.isprintable():
-            raise ValueError("reviewer_label must not contain control characters")
-        return normalized
 
     @field_validator("note")
     @classmethod
@@ -54,6 +43,7 @@ class DraftReview(BaseModel):
     dispute_id: str = Field(min_length=1, max_length=200)
     draft_id: str = Field(min_length=1, max_length=200)
     decision: ReviewDecision
+    reviewer_user_id: str | None = Field(default=None, max_length=200)
     reviewer_label: str = Field(min_length=1, max_length=200)
     note: str | None = Field(default=None, max_length=2_000)
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -71,13 +61,16 @@ def create_draft_review(
     draft_id: str,
     request: DraftReviewRequest,
     *,
+    reviewer_user_id: str,
+    reviewer_label: str,
     created_at: datetime | None = None,
 ) -> DraftReview:
     request_payload = {
         "dispute_id": dispute_id,
         "draft_id": draft_id,
         "decision": request.decision,
-        "reviewer_label": request.reviewer_label,
+        "reviewer_user_id": reviewer_user_id,
+        "reviewer_label": reviewer_label,
         "note": request.note,
     }
     encoded = json.dumps(
@@ -95,7 +88,8 @@ def create_draft_review(
         dispute_id=dispute_id,
         draft_id=draft_id,
         decision=request.decision,
-        reviewer_label=request.reviewer_label,
+        reviewer_user_id=reviewer_user_id,
+        reviewer_label=reviewer_label,
         note=request.note,
         request_sha256=request_sha256,
         created_at=reviewed_at,

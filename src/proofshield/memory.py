@@ -36,6 +36,7 @@ class InMemoryCaseRepository:
     def __init__(self) -> None:
         self._lock = RLock()
         self._cases: dict[str, tuple[DisputeCase, str, datetime]] = {}
+        self._owners: dict[str, str | None] = {}
         self._evidence: dict[str, tuple[str, EvidenceDocument, str, datetime]] = {}
         self._files: dict[str, tuple[EvidenceFileMetadata, str]] = {}
         self._drafts: dict[str, ResponseDraft] = {}
@@ -43,7 +44,9 @@ class InMemoryCaseRepository:
         self._history: list[CaseHistoryEntry] = []
         self._sequence = 0
 
-    def save_case(self, case: DisputeCase, *, source: str) -> bool:
+    def save_case(
+        self, case: DisputeCase, *, source: str, owner_id: str | None = None
+    ) -> bool:
         core_case = case.model_copy(update={"evidence": []})
         digest = model_sha256(core_case)
         with self._lock:
@@ -53,9 +56,14 @@ class InMemoryCaseRepository:
                     raise CaseConflictError(
                         f"case {case.dispute_id} already exists with different core facts"
                     )
+                if self._owners[case.dispute_id] != owner_id:
+                    raise CaseConflictError(
+                        f"case {case.dispute_id} already has a different owner"
+                    )
                 return False
             now = datetime.now(UTC)
             self._cases[case.dispute_id] = (core_case, digest, now)
+            self._owners[case.dispute_id] = owner_id
             self._append_history(
                 case.dispute_id,
                 CaseHistoryAction.CASE_CREATED,
@@ -79,10 +87,12 @@ class InMemoryCaseRepository:
             ]
             return stored[0].model_copy(update={"evidence": evidence}, deep=True)
 
-    def list_cases(self) -> list[CaseSummary]:
+    def list_cases(self, *, owner_id: str | None = None) -> list[CaseSummary]:
         with self._lock:
             rows = []
             for dispute_id, (case, _digest, updated_at) in self._cases.items():
+                if owner_id is not None and self._owners[dispute_id] != owner_id:
+                    continue
                 rows.append(
                     CaseSummary(
                         dispute_id=dispute_id,
@@ -98,6 +108,57 @@ class InMemoryCaseRepository:
                     )
                 )
             return sorted(rows, key=lambda row: (row.updated_at, row.dispute_id), reverse=True)
+
+    def list_unassigned_cases(self) -> list[CaseSummary]:
+        with self._lock:
+            rows = []
+            for dispute_id, (case, _digest, updated_at) in self._cases.items():
+                if self._owners[dispute_id] is not None:
+                    continue
+                rows.append(
+                    CaseSummary(
+                        dispute_id=dispute_id,
+                        payment_id=case.payment_id,
+                        order_id=case.order_id,
+                        reason=case.reason,
+                        disputed_amount=str(case.disputed_amount),
+                        currency=case.currency,
+                        evidence_count=sum(
+                            1 for row in self._evidence.values() if row[0] == dispute_id
+                        ),
+                        updated_at=updated_at,
+                    )
+                )
+            return sorted(rows, key=lambda row: (row.updated_at, row.dispute_id), reverse=True)
+
+    def claim_case(self, dispute_id: str, owner_id: str) -> bool:
+        with self._lock:
+            stored = self._cases.get(dispute_id)
+            if stored is None:
+                raise CaseNotFoundError(f"case {dispute_id} was not found")
+            current_owner = self._owners[dispute_id]
+            if current_owner == owner_id:
+                return False
+            if current_owner is not None:
+                raise CaseConflictError(
+                    f"case {dispute_id} was claimed by another operator"
+                )
+            now = datetime.now(UTC)
+            self._owners[dispute_id] = owner_id
+            self._cases[dispute_id] = (stored[0], stored[1], now)
+            self._append_history(
+                dispute_id,
+                CaseHistoryAction.CASE_CLAIMED,
+                owner_id,
+                "Case claimed by an authenticated operator.",
+                now,
+            )
+            return True
+
+    def require_case_owner(self, dispute_id: str, owner_id: str) -> None:
+        with self._lock:
+            if self._owners.get(dispute_id) != owner_id:
+                raise CaseNotFoundError(f"case {dispute_id} was not found")
 
     def register_evidence_file(
         self,

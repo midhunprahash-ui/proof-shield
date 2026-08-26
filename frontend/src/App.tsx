@@ -1,31 +1,41 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { apiUrlFromDocument, ProofShieldApi } from "./api";
+import type { ProofShieldApi } from "./api";
 import { CaseQueue } from "./components/CaseQueue";
 import { CaseWorkspace } from "./components/CaseWorkspace";
 import { Icon } from "./components/Icon";
-import { OperatorAccessDialog } from "./components/OperatorAccessDialog";
 import { Overview } from "./components/Overview";
 import { Sidebar, type DashboardView } from "./components/Sidebar";
-import type { CaseSummary, CaseWorkspaceData } from "./types";
+import type {
+  CaseSummary,
+  CaseWorkspaceData,
+  OperatorIdentity,
+} from "./types";
 
 interface ToastState {
   message: string;
   tone: "danger" | "good";
 }
 
-export function App() {
-  const api = useMemo(() => new ProofShieldApi(apiUrlFromDocument()), []);
+export function App({
+  api,
+  operator,
+  onSignOut,
+}: {
+  api: ProofShieldApi;
+  operator: OperatorIdentity;
+  onSignOut: () => Promise<void>;
+}) {
   const [activeView, setActiveView] = useState<DashboardView>("overview");
   const [cases, setCases] = useState<CaseSummary[]>([]);
+  const [unassignedCases, setUnassignedCases] = useState<CaseSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<CaseWorkspaceData | null>(null);
   const [loadingCases, setLoadingCases] = useState(true);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [operatorSecret, setOperatorSecret] = useState("");
-  const [operatorDialogOpen, setOperatorDialogOpen] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const notify = useCallback((message: string, tone: "danger" | "good" = "good") => {
@@ -39,8 +49,12 @@ export function App() {
   }, []);
 
   const loadCases = useCallback(async (signal?: AbortSignal) => {
-    const nextCases = await api.listCases(signal);
+    const [nextCases, nextUnassignedCases] = await Promise.all([
+      api.listCases(signal),
+      api.listUnassignedCases(signal),
+    ]);
     setCases(nextCases);
+    setUnassignedCases(nextUnassignedCases);
     setLoadError(null);
   }, [api]);
 
@@ -102,6 +116,24 @@ export function App() {
     setSelectedId(disputeId);
   }
 
+  async function claimCase(disputeId: string) {
+    setClaimingId(disputeId);
+    try {
+      await api.claimCase(disputeId);
+      await loadCases();
+      notify("Case claimed. It is now visible only in your queue.");
+      openCase(disputeId);
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "Case could not be claimed.",
+        "danger",
+      );
+      await loadCases();
+    } finally {
+      setClaimingId(null);
+    }
+  }
+
   async function retry() {
     setLoadingCases(true);
     try {
@@ -133,15 +165,13 @@ export function App() {
             >
               <Icon name="refresh" size={18} />
             </button>
-            {operatorSecret ? (
-              <button className="operator-pill unlocked" onClick={() => setOperatorSecret("")} type="button">
-                <Icon name="lock" size={15} /> Operator unlocked · clear
-              </button>
-            ) : (
-              <button className="operator-pill" onClick={() => setOperatorDialogOpen(true)} type="button">
-                <Icon name="lock" size={15} /> Operator access
-              </button>
-            )}
+            <button
+              className="operator-pill unlocked"
+              onClick={() => void onSignOut()}
+              type="button"
+            >
+              <Icon name="lock" size={15} /> {operator.display_name} · sign out
+            </button>
           </div>
         </header>
 
@@ -160,8 +190,7 @@ export function App() {
                 notify={notify}
                 onBack={() => setSelectedId(null)}
                 onRefresh={refreshWorkspace}
-                onRequestOperator={() => setOperatorDialogOpen(true)}
-                operatorSecret={operatorSecret}
+                operator={operator}
               />
             ) : null
           ) : loadingCases ? (
@@ -169,24 +198,21 @@ export function App() {
           ) : activeView === "overview" ? (
             <Overview
               cases={cases}
+              unassignedCount={unassignedCases.length}
               onOpenCase={openCase}
               onOpenQueue={() => setActiveView("cases")}
             />
           ) : (
-            <CaseQueue cases={cases} onOpenCase={openCase} />
+            <CaseQueue
+              cases={cases}
+              claimingId={claimingId}
+              onClaim={(disputeId) => void claimCase(disputeId)}
+              onOpenCase={openCase}
+              unassignedCases={unassignedCases}
+            />
           )}
         </main>
       </div>
-
-      <OperatorAccessDialog
-        onClose={() => setOperatorDialogOpen(false)}
-        onUnlock={(secret) => {
-          setOperatorSecret(secret);
-          setOperatorDialogOpen(false);
-          notify("Operator controls unlocked for this session.", "good");
-        }}
-        open={operatorDialogOpen}
-      />
 
       {toast ? (
         <div aria-live="polite" className={`toast toast-${toast.tone}`} role="status">

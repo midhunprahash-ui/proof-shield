@@ -100,9 +100,8 @@ def test_verified_dispute_event_is_assessed_and_audited(tmp_path) -> None:
         AuditStatus.RECEIVED,
         AuditStatus.PROCESSED,
     ]
-    stored_case = client.get("/v1/cases/disp_demo_1")
-    assert stored_case.status_code == 200
-    assert stored_case.json()["evidence"] == []
+    stored_case = client.app.state.case_repository.get_case("disp_demo_1")
+    assert stored_case.evidence == []
 
 
 def test_duplicate_event_is_acknowledged_without_reprocessing(tmp_path) -> None:
