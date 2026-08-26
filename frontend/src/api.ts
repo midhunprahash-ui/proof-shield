@@ -6,8 +6,10 @@ import type {
   DisputeCase,
   DraftReview,
   EvidenceDocument,
+  EvidenceExtractionProposal,
   EvidenceFileMetadata,
   EvidenceSubmission,
+  OperatorIdentity,
   ResponseDraft,
   ReviewDecision,
 } from "./types";
@@ -15,12 +17,10 @@ import type {
 type Fetcher = typeof fetch;
 
 interface RequestOptions extends RequestInit {
-  operatorSecret?: string;
 }
 
 interface ReviewInput {
   decision: ReviewDecision;
-  reviewerLabel: string;
   note?: string;
 }
 
@@ -38,12 +38,34 @@ export class ProofShieldApi {
   constructor(
     private readonly baseUrl: string,
     private readonly fetcher: Fetcher = fetch,
+    private readonly accessToken: () => string | null = () => null,
   ) {}
+
+  getOperator(signal?: AbortSignal): Promise<OperatorIdentity> {
+    return this.request<OperatorIdentity>(
+      "/v1/auth/me",
+      signal ? { signal } : {},
+    );
+  }
 
   listCases(signal?: AbortSignal): Promise<CaseSummary[]> {
     return this.request<CaseSummary[]>(
       "/v1/cases",
       signal ? { signal } : {},
+    );
+  }
+
+  listUnassignedCases(signal?: AbortSignal): Promise<CaseSummary[]> {
+    return this.request<CaseSummary[]>(
+      "/v1/cases/unassigned",
+      signal ? { signal } : {},
+    );
+  }
+
+  claimCase(disputeId: string): Promise<DisputeCase> {
+    return this.request<DisputeCase>(
+      `/v1/cases/${encodeURIComponent(disputeId)}/claim`,
+      { method: "POST" },
     );
   }
 
@@ -79,12 +101,11 @@ export class ProofShieldApi {
   getReview(
     disputeId: string,
     draftId: string,
-    operatorSecret: string,
     signal?: AbortSignal,
   ): Promise<DraftReview> {
     return this.request<DraftReview>(
       this.draftPath(disputeId, draftId, "/review"),
-      signal ? { operatorSecret, signal } : { operatorSecret },
+      signal ? { signal } : {},
     );
   }
 
@@ -92,17 +113,14 @@ export class ProofShieldApi {
     disputeId: string,
     draftId: string,
     input: ReviewInput,
-    operatorSecret: string,
   ): Promise<DraftReview> {
     return this.request<DraftReview>(
       this.draftPath(disputeId, draftId, "/reviews"),
       {
         method: "POST",
-        operatorSecret,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           decision: input.decision,
-          reviewer_label: input.reviewerLabel,
           note: input.note || null,
         }),
       },
@@ -112,13 +130,15 @@ export class ProofShieldApi {
   async downloadPacket(
     disputeId: string,
     draftId: string,
-    operatorSecret: string,
   ): Promise<{ blob: Blob; packetSha256: string; manifestSha256: string }> {
+    const token = this.accessToken();
+    const headers = new Headers();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
     const response = await this.fetcher.call(
       globalThis,
       `${this.baseUrl}${this.draftPath(disputeId, draftId, "/packet")}`,
       {
-        headers: { "X-ProofShield-Operator-Secret": operatorSecret },
+        headers,
       },
     );
     if (!response.ok) throw await this.toApiError(response);
@@ -153,18 +173,31 @@ export class ProofShieldApi {
     );
   }
 
+  extractEvidence(
+    disputeId: string,
+    fileId: string,
+    evidenceType: EvidenceDocument["evidence_type"],
+  ): Promise<EvidenceExtractionProposal> {
+    return this.request<EvidenceExtractionProposal>(
+      `/v1/cases/${encodeURIComponent(disputeId)}/files/${encodeURIComponent(fileId)}/extract`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ evidence_type: evidenceType }),
+      },
+    );
+  }
+
   private draftPath(disputeId: string, draftId: string, suffix: string): string {
     return `/v1/cases/${encodeURIComponent(disputeId)}/drafts/${encodeURIComponent(draftId)}${suffix}`;
   }
 
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { operatorSecret, ...requestOptions } = options;
-    const headers = new Headers(requestOptions.headers);
-    if (operatorSecret) {
-      headers.set("X-ProofShield-Operator-Secret", operatorSecret);
-    }
+    const headers = new Headers(options.headers);
+    const token = this.accessToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
     const response = await this.fetcher.call(globalThis, `${this.baseUrl}${path}`, {
-      ...requestOptions,
+      ...options,
       headers,
     });
     if (!response.ok) throw await this.toApiError(response);

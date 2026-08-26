@@ -5,11 +5,20 @@ from __future__ import annotations
 import json
 import logging
 import os
-import secrets
 from enum import StrEnum
 from typing import Annotated
 
-from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
@@ -36,6 +45,14 @@ from proofshield.drafting import (
     ResponseDraft,
 )
 from proofshield.evidence import EvidenceSubmission
+from proofshield.extraction import (
+    DeterministicEvidenceExtractor,
+    EvidenceExtractionError,
+    EvidenceExtractionProposal,
+    EvidenceExtractionRequest,
+    EvidenceExtractor,
+    UnsupportedExtractionSource,
+)
 from proofshield.file_store import (
     MAX_EVIDENCE_FILE_BYTES,
     EvidenceFileError,
@@ -44,6 +61,14 @@ from proofshield.file_store import (
     EvidenceFileUnavailable,
     UnsupportedEvidenceFile,
     safe_original_name,
+)
+from proofshield.operator_auth import (
+    InvalidOperatorToken,
+    OperatorAuthenticationUnavailable,
+    OperatorAuthenticator,
+    OperatorIdentity,
+    OperatorNotAuthorized,
+    PublicAuthConfig,
 )
 from proofshield.packet import EvidencePacketError, build_evidence_packet
 from proofshield.reviewing import (
@@ -86,10 +111,12 @@ class WebhookReceipt(BaseModel):
 def create_app(
     *,
     webhook_secret: str | None = None,
-    operator_secret: str | None = None,
+    operator_authenticator: OperatorAuthenticator | None = None,
+    public_auth_config: PublicAuthConfig | None = None,
     case_repository: CaseRepository | None = None,
     evidence_file_store: EvidenceFileStore | None = None,
     webhook_ledger: EventLedger | None = None,
+    evidence_extractor: EvidenceExtractor | None = None,
 ) -> FastAPI:
     application = FastAPI(
         title="ProofShield API",
@@ -105,8 +132,8 @@ def create_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=[
             "Accept",
+            "Authorization",
             "Content-Type",
-            "X-ProofShield-Operator-Secret",
         ],
         expose_headers=[
             "Content-Disposition",
@@ -118,9 +145,7 @@ def create_app(
     assessor = CaseAssessor()
     draft_generator = EvidenceGroundedDraftGenerator()
     configured_secret = webhook_secret or os.getenv("RAZORPAY_WEBHOOK_SECRET")
-    configured_operator_secret = operator_secret or os.getenv(
-        "PROOFSHIELD_OPERATOR_SECRET"
-    )
+    configured_extractor = evidence_extractor or DeterministicEvidenceExtractor()
 
     supplied_components = (case_repository, evidence_file_store, webhook_ledger)
     if any(component is not None for component in supplied_components) and not all(
@@ -135,6 +160,8 @@ def create_app(
         configured_cases = case_repository
         configured_files = evidence_file_store
         configured_ledger = webhook_ledger
+        configured_authenticator = operator_authenticator
+        configured_public_auth = public_auth_config
     else:
         try:
             components = build_supabase_components()
@@ -142,17 +169,22 @@ def create_app(
             configured_cases = None
             configured_files = None
             configured_ledger = None
+            configured_authenticator = None
+            configured_public_auth = None
             configuration_error = str(error)
         else:
             configured_cases = components.cases
             configured_files = components.files
             configured_ledger = components.ledger
+            configured_authenticator = components.authenticator
+            configured_public_auth = components.public_auth_config
 
     application.state.persistence = "supabase" if configuration_error is None else "unconfigured"
     application.state.configuration_error = configuration_error
     application.state.webhook_ledger = configured_ledger
     application.state.case_repository = configured_cases
     application.state.evidence_file_store = configured_files
+    application.state.operator_authenticator = configured_authenticator
 
     def cases() -> CaseRepository:
         if configured_cases is None:
@@ -178,22 +210,65 @@ def create_app(
             )
         return configured_ledger
 
-    def require_operator_secret(supplied_secret: str | None) -> None:
-        if configured_operator_secret is None or len(configured_operator_secret) < 32:
+    def require_operator(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> OperatorIdentity:
+        if configured_authenticator is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=(
-                    "PROOFSHIELD_OPERATOR_SECRET must be configured with at least "
-                    "32 characters."
-                ),
+                detail="Supabase operator authentication is not configured.",
             )
-        if supplied_secret is None or not secrets.compare_digest(
-            supplied_secret, configured_operator_secret
-        ):
+        scheme, separator, token = (authorization or "").partition(" ")
+        if separator != " " or scheme.casefold() != "bearer" or not token.strip():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="A valid ProofShield operator secret is required.",
+                detail="A Supabase operator bearer token is required.",
+                headers={"WWW-Authenticate": "Bearer"},
             )
+        try:
+            return configured_authenticator.authenticate(token.strip())
+        except InvalidOperatorToken as error:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=str(error),
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from error
+        except OperatorNotAuthorized as error:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(error),
+            ) from error
+        except OperatorAuthenticationUnavailable as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(error),
+            ) from error
+
+    def require_owned_case(dispute_id: str, operator: OperatorIdentity) -> None:
+        try:
+            cases().require_case_owner(dispute_id, str(operator.user_id))
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    operator_dependency = Depends(require_operator)
+
+    @application.get("/v1/auth/config", response_model=PublicAuthConfig)
+    def get_public_auth_config() -> PublicAuthConfig:
+        if configured_public_auth is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase public Auth configuration is not available.",
+            )
+        return configured_public_auth
+
+    @application.get("/v1/auth/me", response_model=OperatorIdentity)
+    def get_operator_identity(
+        operator: OperatorIdentity = operator_dependency,
+    ) -> OperatorIdentity:
+        return operator
 
     @application.get("/health")
     def health(response: Response) -> dict[str, str]:
@@ -225,14 +300,21 @@ def create_app(
         response_model=DisputeCase,
         status_code=status.HTTP_201_CREATED,
     )
-    def create_local_case(case: DisputeCase) -> DisputeCase:
+    def create_local_case(
+        case: DisputeCase,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> DisputeCase:
         if case.evidence:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Create the case first, then add evidence through its evidence endpoint.",
             )
         try:
-            created = cases().save_case(case, source="manual_api")
+            created = cases().save_case(
+                case,
+                source="manual_api",
+                owner_id=str(operator.user_id),
+            )
         except CaseConflictError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -246,12 +328,44 @@ def create_app(
         return cases().get_case(case.dispute_id)
 
     @application.get("/v1/cases", response_model=list[CaseSummary])
-    def list_local_cases() -> list[CaseSummary]:
-        return cases().list_cases()
+    def list_local_cases(
+        operator: OperatorIdentity = operator_dependency,
+    ) -> list[CaseSummary]:
+        return cases().list_cases(owner_id=str(operator.user_id))
+
+    @application.get("/v1/cases/unassigned", response_model=list[CaseSummary])
+    def list_unassigned_cases(
+        operator: OperatorIdentity = operator_dependency,
+    ) -> list[CaseSummary]:
+        del operator
+        return cases().list_unassigned_cases()
+
+    @application.post("/v1/cases/{dispute_id}/claim", response_model=DisputeCase)
+    def claim_unassigned_case(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> DisputeCase:
+        try:
+            cases().claim_case(dispute_id, str(operator.user_id))
+            return cases().get_case(dispute_id)
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except CaseConflictError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
 
     @application.get("/v1/cases/{dispute_id}", response_model=DisputeCase)
-    def get_local_case(dispute_id: str) -> DisputeCase:
+    def get_local_case(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> DisputeCase:
         try:
+            require_owned_case(dispute_id, operator)
             return cases().get_case(dispute_id)
         except CaseNotFoundError as error:
             raise HTTPException(
@@ -267,9 +381,10 @@ def create_app(
     async def upload_case_file(
         dispute_id: str,
         file: Annotated[UploadFile, File(description="Local evidence source")],
+        operator: OperatorIdentity = operator_dependency,
     ) -> EvidenceFileMetadata:
         try:
-            cases().get_case(dispute_id)
+            require_owned_case(dispute_id, operator)
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -328,12 +443,58 @@ def create_app(
         "/v1/cases/{dispute_id}/files",
         response_model=list[EvidenceFileMetadata],
     )
-    def list_case_files(dispute_id: str) -> list[EvidenceFileMetadata]:
+    def list_case_files(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> list[EvidenceFileMetadata]:
         try:
+            require_owned_case(dispute_id, operator)
             return cases().list_evidence_files(dispute_id)
         except CaseNotFoundError as error:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+
+    @application.post(
+        "/v1/cases/{dispute_id}/files/{file_id}/extract",
+        response_model=EvidenceExtractionProposal,
+    )
+    def extract_case_file(
+        dispute_id: str,
+        file_id: str,
+        request: EvidenceExtractionRequest,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> EvidenceExtractionProposal:
+        try:
+            require_owned_case(dispute_id, operator)
+            record = cases().get_evidence_file_record(dispute_id, file_id)
+            content = files().read(record.storage_key)
+            return configured_extractor.extract(
+                content,
+                content_type=record.metadata.content_type,
+                evidence_type=request.evidence_type,
+                source_file_id=file_id,
+                source_sha256=record.metadata.sha256,
+            )
+        except CaseNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
+        except UnsupportedExtractionSource as error:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=str(error),
+            ) from error
+        except EvidenceExtractionError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        except EvidenceFileUnavailable as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(error),
             ) from error
 
@@ -343,9 +504,12 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     def add_case_evidence(
-        dispute_id: str, submission: EvidenceSubmission
+        dispute_id: str,
+        submission: EvidenceSubmission,
+        operator: OperatorIdentity = operator_dependency,
     ) -> EvidenceDocument:
         try:
+            require_owned_case(dispute_id, operator)
             file_metadata = None
             if submission.source_file_id is not None:
                 file_metadata = cases().get_evidence_file(
@@ -381,8 +545,12 @@ def create_app(
         "/v1/cases/{dispute_id}/assessment",
         response_model=Assessment,
     )
-    def assess_local_case(dispute_id: str) -> Assessment:
+    def assess_local_case(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> Assessment:
         try:
+            require_owned_case(dispute_id, operator)
             case = cases().get_case(dispute_id)
             assessment = assessor.assess(case)
             cases().record_assessment(assessment)
@@ -398,8 +566,13 @@ def create_app(
         response_model=ResponseDraft,
         status_code=status.HTTP_201_CREATED,
     )
-    def create_case_draft(dispute_id: str, response: Response) -> ResponseDraft:
+    def create_case_draft(
+        dispute_id: str,
+        response: Response,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> ResponseDraft:
         try:
+            require_owned_case(dispute_id, operator)
             case = cases().get_case(dispute_id)
             assessment = assessor.assess(case)
             draft = draft_generator.generate(case, assessment)
@@ -428,8 +601,12 @@ def create_app(
         "/v1/cases/{dispute_id}/drafts",
         response_model=list[ResponseDraft],
     )
-    def list_case_drafts(dispute_id: str) -> list[ResponseDraft]:
+    def list_case_drafts(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> list[ResponseDraft]:
         try:
+            require_owned_case(dispute_id, operator)
             return cases().list_drafts(dispute_id)
         except CaseNotFoundError as error:
             raise HTTPException(
@@ -441,8 +618,13 @@ def create_app(
         "/v1/cases/{dispute_id}/drafts/{draft_id}",
         response_model=ResponseDraft,
     )
-    def get_case_draft(dispute_id: str, draft_id: str) -> ResponseDraft:
+    def get_case_draft(
+        dispute_id: str,
+        draft_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> ResponseDraft:
         try:
+            require_owned_case(dispute_id, operator)
             return cases().get_draft(dispute_id, draft_id)
         except CaseNotFoundError as error:
             raise HTTPException(
@@ -465,12 +647,18 @@ def create_app(
         draft_id: str,
         request: DraftReviewRequest,
         response: Response,
-        x_proofshield_operator_secret: Annotated[str | None, Header()] = None,
+        operator: OperatorIdentity = operator_dependency,
     ) -> DraftReview:
-        require_operator_secret(x_proofshield_operator_secret)
         try:
+            require_owned_case(dispute_id, operator)
             cases().get_draft(dispute_id, draft_id)
-            review = create_draft_review(dispute_id, draft_id, request)
+            review = create_draft_review(
+                dispute_id,
+                draft_id,
+                request,
+                reviewer_user_id=str(operator.user_id),
+                reviewer_label=operator.display_name,
+            )
             created = cases().save_review(review)
             stored = cases().get_review(dispute_id, draft_id)
         except CaseNotFoundError as error:
@@ -499,10 +687,10 @@ def create_app(
     def get_case_draft_review(
         dispute_id: str,
         draft_id: str,
-        x_proofshield_operator_secret: Annotated[str | None, Header()] = None,
+        operator: OperatorIdentity = operator_dependency,
     ) -> DraftReview:
-        require_operator_secret(x_proofshield_operator_secret)
         try:
+            require_owned_case(dispute_id, operator)
             return cases().get_review(dispute_id, draft_id)
         except (CaseNotFoundError, DraftNotFoundError, ReviewNotFoundError) as error:
             raise HTTPException(
@@ -517,10 +705,10 @@ def create_app(
     def download_case_evidence_packet(
         dispute_id: str,
         draft_id: str,
-        x_proofshield_operator_secret: Annotated[str | None, Header()] = None,
+        operator: OperatorIdentity = operator_dependency,
     ) -> Response:
-        require_operator_secret(x_proofshield_operator_secret)
         try:
+            require_owned_case(dispute_id, operator)
             case = cases().get_case(dispute_id)
             draft = cases().get_draft(dispute_id, draft_id)
             review = cases().get_review(dispute_id, draft_id)
@@ -567,8 +755,12 @@ def create_app(
         "/v1/cases/{dispute_id}/history",
         response_model=list[CaseHistoryEntry],
     )
-    def get_case_history(dispute_id: str) -> list[CaseHistoryEntry]:
+    def get_case_history(
+        dispute_id: str,
+        operator: OperatorIdentity = operator_dependency,
+    ) -> list[CaseHistoryEntry]:
         try:
+            require_owned_case(dispute_id, operator)
             return cases().get_history(dispute_id)
         except CaseNotFoundError as error:
             raise HTTPException(

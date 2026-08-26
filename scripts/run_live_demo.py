@@ -29,19 +29,21 @@ class LiveDemoError(RuntimeError):
 def run_demo(
     client: TestClient,
     *,
-    operator_secret: str,
+    access_token: str,
     label: str,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Run the complete API flow and return a secret-free verification record."""
 
-    if len(operator_secret) < 32:
-        raise LiveDemoError("the operator secret must contain at least 32 characters")
+    if len(access_token) < 16:
+        raise LiveDemoError("a Supabase operator access token is required")
     started_at = now or datetime.now(UTC)
     if started_at.tzinfo is None:
         raise LiveDemoError("the demo timestamp must include a timezone")
     normalized_label = _normalize_label(label)
     case = _demo_case(normalized_label, started_at)
+    operator_headers = {"Authorization": f"Bearer {access_token}"}
+    client.headers.update(operator_headers)
 
     created = _expect(
         client.post("/v1/cases", json=case.model_dump(mode="json")),
@@ -130,12 +132,11 @@ def run_demo(
     ).json()
     review_path = f"{case_path}/drafts/{draft['draft_id']}/reviews"
     packet_path = f"{case_path}/drafts/{draft['draft_id']}/packet"
-    operator_headers = {"X-ProofShield-Operator-Secret": operator_secret}
-
     _expect(
         client.post(
             review_path,
-            json={"decision": "APPROVED", "reviewer_label": "milestone-9-demo"},
+            json={"decision": "APPROVED"},
+            headers={"Authorization": ""},
         ),
         {401},
         "prove anonymous review is blocked",
@@ -148,7 +149,6 @@ def run_demo(
 
     review_payload = {
         "decision": "APPROVED",
-        "reviewer_label": "milestone-9-demo",
         "note": "Synthetic demo invoice and delivery source checked end to end.",
     }
     review = _expect(
@@ -319,12 +319,27 @@ def main() -> None:
         raise LiveDemoError("the configured environment is not the ProofShield project")
     if arguments.project_ref != settings.project_ref:
         raise LiveDemoError("--project-ref does not match the configured environment")
-    operator_secret = os.getenv("PROOFSHIELD_OPERATOR_SECRET", "")
+    operator_email = os.getenv("PROOFSHIELD_DEMO_OPERATOR_EMAIL", "").strip()
+    operator_password = os.getenv("PROOFSHIELD_DEMO_OPERATOR_PASSWORD", "")
+    if not operator_email or not operator_password:
+        raise LiveDemoError(
+            "PROOFSHIELD_DEMO_OPERATOR_EMAIL and "
+            "PROOFSHIELD_DEMO_OPERATOR_PASSWORD are required"
+        )
+    from supabase import create_client
+
+    auth_client = create_client(settings.url, settings.publishable_key)
+    auth_response = auth_client.auth.sign_in_with_password(
+        {"email": operator_email, "password": operator_password}
+    )
+    session = auth_response.session
+    if session is None or not session.access_token:
+        raise LiveDemoError("Supabase Auth did not return an operator session")
 
     with TestClient(create_app(), raise_server_exceptions=False) as client:
         result = run_demo(
             client,
-            operator_secret=operator_secret,
+            access_token=session.access_token,
             label=arguments.label,
         )
     print(json.dumps(result, indent=2, sort_keys=True))

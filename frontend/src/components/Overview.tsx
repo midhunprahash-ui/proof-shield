@@ -5,10 +5,12 @@ import { StatusBadge } from "./StatusBadge";
 
 export function Overview({
   cases,
+  unassignedCount,
   onOpenCase,
   onOpenQueue,
 }: {
   cases: CaseSummary[];
+  unassignedCount: number;
   onOpenCase: (disputeId: string) => void;
   onOpenQueue: () => void;
 }) {
@@ -43,10 +45,10 @@ export function Overview({
       <section aria-label="Queue metrics" className="metric-grid">
         <MetricCard
           accent="blue"
-          detail="Across the active merchant queue"
+          detail={`${cases.length} assigned to you · ${unassignedCount} awaiting claim`}
           icon="cases"
           label="Open disputes"
-          value={String(cases.length)}
+          value={String(cases.length + unassignedCount)}
         />
         <MetricCard
           accent="green"

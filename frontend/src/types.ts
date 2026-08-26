@@ -115,10 +115,22 @@ export interface DraftReview {
   dispute_id: string;
   draft_id: string;
   decision: ReviewDecision;
+  reviewer_user_id: string | null;
   reviewer_label: string;
   note: string | null;
   request_sha256: string;
   created_at: string;
+}
+
+export interface OperatorIdentity {
+  user_id: string;
+  email: string;
+  display_name: string;
+}
+
+export interface PublicAuthConfig {
+  supabase_url: string;
+  supabase_publishable_key: string;
 }
 
 export interface CaseHistoryEntry {
@@ -126,6 +138,7 @@ export interface CaseHistoryEntry {
   dispute_id: string;
   action:
     | "CASE_CREATED"
+    | "CASE_CLAIMED"
     | "FILE_UPLOADED"
     | "EVIDENCE_ADDED"
     | "ASSESSED"
@@ -155,4 +168,31 @@ export interface EvidenceSubmission {
   delivery_status?: string;
   customer_acknowledged_delivery?: boolean;
   text?: string;
+}
+
+export type ExtractionField =
+  | "order_id"
+  | "payment_id"
+  | "amount"
+  | "issued_at"
+  | "delivery_status"
+  | "customer_acknowledged_delivery"
+  | "text";
+
+export interface ExtractedClaim {
+  field: ExtractionField;
+  value: string | boolean;
+  confidence: number;
+  source_reference: string;
+}
+
+export interface EvidenceExtractionProposal {
+  proposal_id: string;
+  source_file_id: string;
+  source_sha256: string;
+  evidence_type: EvidenceType;
+  extractor: string;
+  claims: ExtractedClaim[];
+  warnings: string[];
+  human_confirmation_required: true;
 }

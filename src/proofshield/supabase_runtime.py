@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from proofshield.audit import SupabaseEventLedger
 from proofshield.case_store import SupabaseCaseRepository
 from proofshield.file_store import SupabaseEvidenceFileStore
+from proofshield.operator_auth import PublicAuthConfig, SupabaseOperatorAuthenticator
 
 
 class SupabaseConfigurationError(RuntimeError):
@@ -22,6 +23,7 @@ class SupabaseConfigurationError(RuntimeError):
 class SupabaseSettings:
     url: str
     secret_key: str
+    publishable_key: str
     project_ref: str
     evidence_bucket: str
 
@@ -32,6 +34,7 @@ class SupabaseSettings:
             os.getenv("SUPABASE_SECRET_KEY", "").strip()
             or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         )
+        publishable_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
         project_ref = os.getenv("SUPABASE_PROJECT_REF", "").strip()
         bucket = os.getenv("SUPABASE_EVIDENCE_BUCKET", "proofshield-evidence").strip()
         missing = [
@@ -39,6 +42,7 @@ class SupabaseSettings:
             for name, value in {
                 "SUPABASE_URL": url,
                 "SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY)": secret_key,
+                "SUPABASE_PUBLISHABLE_KEY": publishable_key,
                 "SUPABASE_PROJECT_REF": project_ref,
                 "SUPABASE_EVIDENCE_BUCKET": bucket,
             }.items()
@@ -63,9 +67,17 @@ class SupabaseSettings:
             raise SupabaseConfigurationError(
                 "SUPABASE_SECRET_KEY still contains the example placeholder"
             )
+        if not (
+            publishable_key.startswith("sb_publishable_")
+            or _jwt_role(publishable_key) == "anon"
+        ):
+            raise SupabaseConfigurationError(
+                "SUPABASE_PUBLISHABLE_KEY must be a publishable/anon browser key"
+            )
         return cls(
             url=url,
             secret_key=secret_key,
+            publishable_key=publishable_key,
             project_ref=project_ref,
             evidence_bucket=bucket,
         )
@@ -77,6 +89,8 @@ class SupabaseComponents:
     cases: SupabaseCaseRepository
     files: SupabaseEvidenceFileStore
     ledger: SupabaseEventLedger
+    authenticator: SupabaseOperatorAuthenticator
+    public_auth_config: PublicAuthConfig
 
 
 def build_supabase_components(
@@ -100,6 +114,11 @@ def build_supabase_components(
         cases=SupabaseCaseRepository(client),
         files=SupabaseEvidenceFileStore(client, bucket=configured.evidence_bucket),
         ledger=SupabaseEventLedger(client),
+        authenticator=SupabaseOperatorAuthenticator(client),
+        public_auth_config=PublicAuthConfig(
+            supabase_url=configured.url,
+            supabase_publishable_key=configured.publishable_key,
+        ),
     )
 
 

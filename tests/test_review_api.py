@@ -13,9 +13,9 @@ from proofshield.memory import (
     InMemoryEvidenceFileStore,
 )
 from proofshield.synthetic import make_case
+from tests.auth_helpers import AUTH_HEADERS, TEST_AUTHENTICATOR, TEST_OPERATOR
 
-OPERATOR_SECRET = "test-operator-secret-with-32-characters"
-OPERATOR_HEADERS = {"X-ProofShield-Operator-Secret": OPERATOR_SECRET}
+OPERATOR_HEADERS = AUTH_HEADERS
 
 
 def make_client() -> tuple[TestClient, InMemoryEvidenceFileStore]:
@@ -23,11 +23,12 @@ def make_client() -> tuple[TestClient, InMemoryEvidenceFileStore]:
     client = TestClient(
         create_app(
             webhook_secret="local-secret",
-            operator_secret=OPERATOR_SECRET,
+            operator_authenticator=TEST_AUTHENTICATOR,
             case_repository=InMemoryCaseRepository(),
             evidence_file_store=file_store,
             webhook_ledger=InMemoryEventLedger(),
-        )
+        ),
+        headers=AUTH_HEADERS,
     )
     return client, file_store
 
@@ -91,42 +92,35 @@ def packet_url(case: dict, draft: dict) -> str:
     return f"/v1/cases/{case['dispute_id']}/drafts/{draft['draft_id']}/packet"
 
 
-def test_operator_secret_is_required_for_review_and_packet() -> None:
+def test_operator_bearer_token_is_required_for_review_and_packet() -> None:
     client, _files = make_client()
     case, draft = create_draft(client, 201)
 
     review = client.post(
         review_url(case, draft),
-        json={"decision": "APPROVED", "reviewer_label": "merchant-operator"},
+        json={"decision": "APPROVED"},
+        headers={"Authorization": ""},
     )
-    packet = client.get(packet_url(case, draft))
+    packet = client.get(packet_url(case, draft), headers={"Authorization": ""})
 
     assert review.status_code == 401
     assert packet.status_code == 401
 
 
-def test_review_endpoint_fails_closed_without_configured_operator_secret(
-    monkeypatch,
-) -> None:
-    monkeypatch.delenv("PROOFSHIELD_OPERATOR_SECRET", raising=False)
+def test_case_endpoints_fail_closed_without_operator_authenticator() -> None:
     client = TestClient(
         create_app(
             webhook_secret="local-secret",
             case_repository=InMemoryCaseRepository(),
             evidence_file_store=InMemoryEvidenceFileStore(),
             webhook_ledger=InMemoryEventLedger(),
-        )
+        ),
+        headers=AUTH_HEADERS,
     )
-    case, draft = create_draft(client, 207)
-
-    response = client.post(
-        review_url(case, draft),
-        json={"decision": "APPROVED", "reviewer_label": "merchant-operator"},
-        headers=OPERATOR_HEADERS,
-    )
+    response = client.get("/v1/cases")
 
     assert response.status_code == 503
-    assert "at least 32 characters" in response.json()["detail"]
+    assert "authentication is not configured" in response.json()["detail"]
 
 
 def test_approved_review_is_idempotent_and_exports_verified_zip() -> None:
@@ -134,7 +128,6 @@ def test_approved_review_is_idempotent_and_exports_verified_zip() -> None:
     case, draft = create_draft(client, 202)
     payload = {
         "decision": "APPROVED",
-        "reviewer_label": "merchant-operator",
         "note": "Invoice and delivery record checked.",
     }
 
@@ -152,6 +145,8 @@ def test_approved_review_is_idempotent_and_exports_verified_zip() -> None:
     assert first.status_code == 201
     assert retry.status_code == 200
     assert retry.json() == first.json()
+    assert first.json()["reviewer_user_id"] == str(TEST_OPERATOR.user_id)
+    assert first.json()["reviewer_label"] == TEST_OPERATOR.display_name
     assert stored_review.json() == first.json()
     assert packet.status_code == 200
     assert packet.headers["content-type"] == "application/zip"
@@ -191,14 +186,13 @@ def test_conflicting_second_review_is_rejected() -> None:
     case, draft = create_draft(client, 203)
     approved = client.post(
         review_url(case, draft),
-        json={"decision": "APPROVED", "reviewer_label": "operator-a"},
+        json={"decision": "APPROVED"},
         headers=OPERATOR_HEADERS,
     )
     changed = client.post(
         review_url(case, draft),
         json={
             "decision": "REJECTED",
-            "reviewer_label": "operator-a",
             "note": "Changed decision.",
         },
         headers=OPERATOR_HEADERS,
@@ -216,7 +210,6 @@ def test_rejected_draft_cannot_export_packet() -> None:
         review_url(case, draft),
         json={
             "decision": "REJECTED",
-            "reviewer_label": "merchant-operator",
             "note": "Delivery record needs manual correction.",
         },
         headers=OPERATOR_HEADERS,
@@ -234,7 +227,20 @@ def test_rejection_requires_a_reason() -> None:
 
     response = client.post(
         review_url(case, draft),
-        json={"decision": "REJECTED", "reviewer_label": "merchant-operator"},
+        json={"decision": "REJECTED"},
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 422
+
+
+def test_reviewer_identity_cannot_be_supplied_by_the_caller() -> None:
+    client, _files = make_client()
+    case, draft = create_draft(client, 208)
+
+    response = client.post(
+        review_url(case, draft),
+        json={"decision": "APPROVED", "reviewer_label": "forged-admin"},
         headers=OPERATOR_HEADERS,
     )
 
@@ -246,7 +252,7 @@ def test_packet_fails_closed_when_stored_bytes_are_changed() -> None:
     case, draft = create_draft(client, 206)
     client.post(
         review_url(case, draft),
-        json={"decision": "APPROVED", "reviewer_label": "merchant-operator"},
+        json={"decision": "APPROVED"},
         headers=OPERATOR_HEADERS,
     )
     first_key = next(iter(file_store.blobs))

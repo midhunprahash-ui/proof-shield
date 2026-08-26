@@ -37,7 +37,10 @@ Evidence-grounded draft gate
 PENDING_HUMAN_APPROVAL
        |
        v
-Operator-secret-protected human review
+Named Supabase Auth operator review
+  - bearer token verified by Supabase Auth
+  - active operator registry controls display name
+  - verified user ID written to immutable review
   - immutable APPROVED or REJECTED decision
   - exact retries are idempotent
   - no automatic submission
@@ -48,9 +51,9 @@ Rejected -> no export
        ^
        |
 React merchant console (Bun bundle)
-  - local FastAPI calls only
-  - no direct Supabase access
-  - operator secret kept in page memory only
+  - Supabase Auth session only
+  - all case data goes through local FastAPI
+  - publishable key is browser-safe; secret key stays backend-only
 ```
 
 ## Current webhook flow
@@ -78,6 +81,9 @@ Razorpay payload adapter -> deterministic verifier
        |
        v
 Append-only Supabase audit record
+       |
+       v
+Unassigned merchant queue -> one active operator claims atomically
 ```
 
 ## Current evidence flow
@@ -97,7 +103,13 @@ Upload evidence source to private Supabase Storage
   - case-isolated server key includes the SHA-256 hash
        |
        v
-Human reviews the source and enters structured facts
+Provider-independent extraction proposal
+  - JSON pointer or text line reference per field
+  - score is not a calibrated probability
+  - cannot mark evidence as verified
+       |
+       v
+Human reviews, edits and explicitly confirms structured facts
        |
        v
 Evidence ID + source file linked to exactly one dispute
@@ -118,7 +130,9 @@ Verified webhook event
 Payment, order and merchant-evidence adapters
        |
        v
-AI document extraction
+Document extraction provider
+  - deterministic labelled-field baseline now
+  - OCR or document model later for PDF/images
        |
        v
 Deterministic verifier
@@ -135,8 +149,9 @@ Outcome evaluation
 
 ## Safety boundary
 
-The future AI component may propose extracted facts, but it cannot mark its own
-claims as verified. Source verification comes from trusted integration adapters.
+Any extraction component may propose facts, but it cannot mark its own claims as
+verified. Source verification comes from an explicit human confirmation or a
+future trusted integration adapter.
 The deterministic verifier remains the final gate before a response can be
 drafted. Final submission always requires a human.
 
@@ -147,30 +162,29 @@ webhook idempotency, append-only audit/history tables, and a private evidence
 bucket. The API and frontend are not deployed. This keeps today’s architecture
 simple while allowing either component to be hosted elsewhere later.
 
-All public-schema ProofShield tables use RLS with no browser-facing policies.
-Only backend code holding the Supabase secret/service-role key can access them.
-That key must never enter the frontend. When user accounts are introduced, the
-schema will gain explicit ownership columns and narrowly scoped policies rather
-than opening the current backend tables directly.
+All public-schema ProofShield tables use RLS. The operator-auth migration adds
+read-only policies that require an active registry row and case ownership.
+Authenticated browser roles receive no insert, update, or delete grants. All
+mutations stay behind FastAPI and its backend-only Supabase secret key.
 
 Response drafts use the same boundary. They are append-only through the trusted
 backend, transactionally add one `DRAFT_CREATED` history event, and cannot be
 read directly by browser roles.
 
-Draft reviews are also append-only and backend-only. The local API adds a
-separate operator-secret check before allowing review actions or raw evidence
-downloads. Approval does not submit a response; it only unlocks a deterministic
-ZIP whose cited Storage objects are re-hashed before inclusion. Supabase Auth
-and named operator identities will replace the shared operator gate before
-deployment. The current local frontend holds the operator secret only in React
-memory for the active page and never persists it or includes it in its bundle.
+Draft reviews are also append-only and backend-only. The local API verifies the
+Supabase access token and active operator row before allowing review actions or
+raw evidence downloads. Approval does not submit a response; it only unlocks a
+deterministic ZIP whose cited Storage objects are re-hashed before inclusion.
+The caller cannot supply the reviewer label; the backend stamps the verified
+Auth user ID and registry-controlled display name.
 
 ## Current frontend boundary
 
 ```text
 React + TypeScript merchant console
        |
-       | local HTTP, restricted CORS origins
+       | publishable key: Supabase Auth session only
+       | bearer token over local HTTP, restricted CORS origins
        v
 FastAPI validation and authorization
        |
@@ -179,7 +193,8 @@ FastAPI validation and authorization
 Supabase Postgres + private Storage
 ```
 
-The browser can list cases, upload a reviewed source, add structured evidence,
+The browser can sign in, claim an unassigned webhook case, list only owned
+cases, upload a reviewed source, add structured evidence,
 run the verifier, create a cited draft, record one protected human decision,
 download an approved packet, and view case history. It cannot access Supabase
 tables or Storage directly and it cannot submit a response to Razorpay.
